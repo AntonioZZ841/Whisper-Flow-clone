@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Whisper Flow — speak, get the text you meant</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎙️</text></svg>"
+    />
+  </head>
+  <body>
+    <main class="app">
+      <header class="app__header">
+        <h1>🎙️ Whisper Flow <span class="clone-tag">clone</span></h1>
+        <p class="tagline">Speak naturally. Get the text you meant to type.</p>
+        <div class="pills">
+          <span id="providers" class="pill pill--muted" title="Stage 1 → Stage 2 of the pipeline">…</span>
+          <span id="status" class="pill pill--idle">ready</span>
+        </div>
+      </header>
+
+      <section class="recorder">
+        <button id="ptt" class="ptt" aria-label="Push to talk">
+          <span class="ptt__dot"></span>
+          <span id="ptt-label" class="ptt__label">Hold to talk</span>
+        </button>
+        <p class="hint">
+          Hold the button — or the space bar — and speak; release to finish.
+          A quick tap toggles hands-free mode.
+        </p>
+        <canvas id="meter" width="640" height="56" hidden></canvas>
+        <div id="timer" class="timer" hidden>00:00</div>
+      </section>
+
+      <section class="panes">
+        <div class="pane pane--formatted">
+          <div class="pane__bar">
+            <h2>Flow output</h2>
+            <div class="toolbar">
+              <span id="word-count" class="muted">0 words</span>
+              <button id="copy" class="btn" disabled>Copy</button>
+              <button id="download" class="btn" disabled>Download</button>
+              <button id="clear" class="btn btn--ghost" disabled>Clear</button>
+            </div>
+          </div>
+          <textarea
+            id="formatted"
+            placeholder="Formatted text appears here — cleaned up, punctuated, self-corrections resolved. Each new dictation is inserted at the cursor."
+            spellcheck="true"
+          ></textarea>
+        </div>
+
+        <div class="pane pane--raw">
+          <div class="pane__bar"><h2>Raw transcript</h2></div>
+          <pre id="raw" class="raw" aria-live="polite"></pre>
+          <p class="muted small">
+            What the speech engine actually heard — fillers, false starts and
+            all. The difference between the two panes is the Flow stage.
+          </p>
+        </div>
+      </section>
+
+      <footer class="footer">
+        mic → Whisper ASR → LLM cleanup (Smart&nbsp;Formatting + Backtrack) → text
+      </footer>
+    </main>
+
+    <script src="app.js" type="module"></script>
+  </body>
+</html>

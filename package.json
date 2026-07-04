@@ -1,0 +1,29 @@
+{
+  "name": "whisper-flow-clone",
+  "version": "0.1.0",
+  "description": "Open-source clone of Wispr Flow: browser dictation with a two-stage pipeline — Whisper-family ASR, then an LLM (Claude Sonnet 5 by default, or any OpenAI-compatible API such as DeepSeek) rewrites the raw transcript into the text you meant to type.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "wispr-flow",
+    "whisper",
+    "speech-to-text",
+    "dictation",
+    "voice",
+    "transcription",
+    "claude",
+    "sonnet-5",
+    "deepseek"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.2.0"
+  }
+}
