@@ -57,6 +57,7 @@ Sources: [Baseten × Wispr Flow case study](https://www.baseten.co/resources/cus
 | Mechanism | Real Wispr Flow | This clone |
 | --- | --- | --- |
 | Push-to-talk capture | Global Fn hotkey, any app | In-page button / space bar (hold or tap-toggle) |
+| Transcribe an existing recording | — | Upload / drag-and-drop an audio file (webm, mp3, wav, m4a, ogg, flac) |
 | Stage 1 ASR | Cloud Whisper-family + in-house | Any OpenAI-compatible Whisper endpoint (or mock) |
 | Stage 2 cleanup | Fine-tuned Llama on Baseten | **Claude Sonnet 5** by default, or any OpenAI-compatible chat API (e.g. **DeepSeek**) |
 | Smart Formatting + Backtrack | ✅ | ✅ (the Flow stage's system prompt) |
@@ -112,11 +113,33 @@ the whole UI. Add keys to light up each stage independently:
 > Microphone capture requires a secure context: `localhost` is fine, remote
 > hosts need HTTPS.
 
+## Two ways to get audio in
+
+- **Speak live** — hold the button (or the space bar) and talk; release to
+  finish. A quick tap toggles hands-free mode.
+- **Upload a recording** — drag an audio file onto the drop zone, or click to
+  pick one (`webm`, `mp3`, `wav`, `m4a`, `ogg`, `flac`). The original filename
+  is forwarded so the ASR engine detects the format from its extension.
+
+Both go through the exact same `ASR → Flow` pipeline.
+
 ## API
 
-- `POST /api/transcribe` — multipart form with an `audio` file. Returns
-  `{ raw, formatted, meta }` where `meta` reports which providers ran.
+- `POST /api/transcribe` — multipart form with an `audio` file (a live-recorded
+  blob or an uploaded file). Returns `{ raw, formatted, meta }` where `meta`
+  reports which providers ran.
 - `GET /api/health` — `{ ok, asr: {mode, model}, flow: {provider, model} }`.
+
+## Testing
+
+A committed [`node:test`](test/pipeline.test.mjs) suite spins up the Express app
+with a local mock provider and exercises config selection, all three Flow
+providers, uploaded-file transcription (asserting the extension is forwarded),
+and the raw-transcript fallback:
+
+```bash
+npm test
+```
 
 ## What a browser clone can't do
 

@@ -32,6 +32,16 @@
         </p>
         <canvas id="meter" width="640" height="56" hidden></canvas>
         <div id="timer" class="timer" hidden>00:00</div>
+
+        <div class="upload">
+          <span class="upload__or">or</span>
+          <label id="drop" class="upload__drop">
+            <input id="file" type="file" accept="audio/*,.webm,.m4a,.mp3,.wav,.ogg,.flac" hidden />
+            <strong>Upload a recording</strong>
+            <span class="muted small">drag &amp; drop, or click to choose an audio file</span>
+          </label>
+          <span id="file-name" class="muted small" aria-live="polite"></span>
+        </div>
       </section>
 
       <section class="panes">

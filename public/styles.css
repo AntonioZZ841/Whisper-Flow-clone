@@ -226,6 +226,51 @@ body {
   font-weight: 600;
 }
 
+/* ── Upload ─────────────────────────────────────────────────────────── */
+
+.upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(420px, 100%);
+}
+
+.upload__or {
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.upload__drop {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 16px;
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.upload__drop:hover {
+  border-color: var(--accent);
+}
+
+.upload__drop--over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.upload__drop strong {
+  font-size: 0.92rem;
+}
+
 /* ── Output panes ───────────────────────────────────────────────────── */
 
 .panes {

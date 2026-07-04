@@ -17,6 +17,9 @@ const els = {
   download: document.getElementById('download'),
   clear: document.getElementById('clear'),
   words: document.getElementById('word-count'),
+  file: document.getElementById('file'),
+  drop: document.getElementById('drop'),
+  fileName: document.getElementById('file-name'),
 };
 
 // Presses shorter than this toggle hands-free mode; longer ones behave like
@@ -90,6 +93,39 @@ function init() {
   });
 
   els.formatted.addEventListener('input', refreshOutputs);
+
+  // Upload an existing recording instead of speaking live — same pipeline.
+  els.file.addEventListener('change', () => {
+    if (els.file.files[0]) uploadFile(els.file.files[0]);
+    els.file.value = ''; // allow re-selecting the same file
+  });
+
+  for (const evt of ['dragenter', 'dragover']) {
+    els.drop.addEventListener(evt, (e) => {
+      e.preventDefault();
+      els.drop.classList.add('upload__drop--over');
+    });
+  }
+  for (const evt of ['dragleave', 'drop']) {
+    els.drop.addEventListener(evt, (e) => {
+      e.preventDefault();
+      els.drop.classList.remove('upload__drop--over');
+    });
+  }
+  els.drop.addEventListener('drop', (e) => {
+    const f = e.dataTransfer?.files?.[0];
+    if (f) uploadFile(f);
+  });
+}
+
+function uploadFile(file) {
+  if (state.busy || state.recording) return;
+  if (!/^audio\//.test(file.type) && !/\.(webm|m4a|mp3|wav|ogg|flac|aac|opus)$/i.test(file.name)) {
+    setStatus('error', 'not an audio file');
+    return;
+  }
+  els.fileName.textContent = `${file.name} · ${(file.size / 1024).toFixed(0)} KB`;
+  send(file, file.name);
 }
 
 function isEditable(t) {
@@ -250,12 +286,14 @@ function stopMeter() {
 
 // ── Pipeline round-trip ─────────────────────────────────────────────────
 
-async function send(blob) {
+async function send(blob, filename = 'utterance.webm') {
   state.busy = true;
   setStatus('busy', 'transcribing + formatting…');
 
   const fd = new FormData();
-  fd.append('audio', blob, 'utterance.webm');
+  // Preserve the filename — Whisper-style ASR uses the extension to detect
+  // the audio format, so an uploaded recording.wav must arrive as .wav.
+  fd.append('audio', blob, filename);
 
   try {
     const res = await fetch('/api/transcribe', { method: 'POST', body: fd });

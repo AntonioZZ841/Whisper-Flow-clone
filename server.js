@@ -58,14 +58,21 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  const a = asrConfig();
-  const f = flowConfig();
-  console.log(`Whisper Flow clone → http://localhost:${PORT}`);
-  console.log(
-    `  Stage 1 ASR:  ${a.mode === 'live' ? `live (${a.model})` : 'mock (no TRANSCRIPTION_API_KEY)'}`,
-  );
-  console.log(
-    `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,
-  );
-});
+export { app };
+
+// Only start listening when run directly (`node server.js`) — importing the
+// app for tests must not bind a port.
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+if (isDirectRun) {
+  app.listen(PORT, () => {
+    const a = asrConfig();
+    const f = flowConfig();
+    console.log(`Whisper Flow clone → http://localhost:${PORT}`);
+    console.log(
+      `  Stage 1 ASR:  ${a.mode === 'live' ? `live (${a.model})` : 'mock (no TRANSCRIPTION_API_KEY)'}`,
+    );
+    console.log(
+      `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,
+    );
+  });
+}
