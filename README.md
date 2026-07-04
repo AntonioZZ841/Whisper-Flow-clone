@@ -58,7 +58,7 @@ Sources: [Baseten × Wispr Flow case study](https://www.baseten.co/resources/cus
 | --- | --- | --- |
 | Push-to-talk capture | Global Fn hotkey, any app | In-page button / space bar (hold or tap-toggle) |
 | Transcribe an existing recording | — | Upload / drag-and-drop an audio file (webm, mp3, wav, m4a, ogg, flac) |
-| Stage 1 ASR | Cloud Whisper-family + in-house | Any OpenAI-compatible Whisper endpoint (or mock) |
+| Stage 1 ASR | Cloud Whisper-family + in-house | Any OpenAI-compatible Whisper endpoint, **local NVIDIA NeMo** (GPU), or mock |
 | Stage 2 cleanup | Fine-tuned Llama on Baseten | **Claude Sonnet 5** by default, or any OpenAI-compatible chat API (e.g. **DeepSeek**) |
 | Smart Formatting + Backtrack | ✅ | ✅ (the Flow stage's system prompt) |
 | Per-utterance pipeline | ✅ | ✅ |
@@ -76,9 +76,16 @@ browser (public/)                      server (Node + Express)
 └───────────────────────┘ raw+clean  └──────────────────────────────┘
 ```
 
-- **`src/asr.js`** — forwards the audio blob to an OpenAI-compatible
-  `/audio/transcriptions` endpoint. No key → mock mode (canned disfluent
-  utterance so the pipeline is demoable with zero credentials).
+- **`src/asr.js`** — resolves the ASR provider (`resolveAsr`, unit-tested) and
+  transcribes:
+  - **`openai-compatible`** — forwards the audio to a `/audio/transcriptions`
+    endpoint (OpenAI, whisper.cpp, faster-whisper).
+  - **`nemo`** — local **NVIDIA NeMo** ASR, offered only when the server has an
+    NVIDIA GPU (detected via `nvidia-smi`). Node writes the clip to a temp file
+    and runs the [`scripts/nemo_transcribe.py`](scripts/nemo_transcribe.py)
+    sidecar, which loads a NeMo model (Parakeet/Canary) on the GPU.
+  - **`mock`** — no key and no GPU: a canned disfluent utterance so the pipeline
+    is demoable with zero credentials.
 - **`src/flow.js`** — the Flow stage. Sends the raw transcript plus a
   Smart-Formatting-and-Backtrack system prompt to the configured LLM:
   - **`anthropic`** *(default)* — `claude-sonnet-5` via the official SDK, with
@@ -106,12 +113,42 @@ the whole UI. Add keys to light up each stage independently:
 
 | You want | Set |
 | --- | --- |
-| Real transcription | `TRANSCRIPTION_API_KEY` (OpenAI, or point `TRANSCRIPTION_API_URL` at your own whisper.cpp/faster-whisper server) |
+| Cloud transcription | `TRANSCRIPTION_API_KEY` (OpenAI, or point `TRANSCRIPTION_API_URL` at your own whisper.cpp/faster-whisper server) |
+| Local transcription on a GPU box | `TRANSCRIPTION_PROVIDER=nemo` (see below) |
 | Cleanup with Claude Sonnet 5 | `ANTHROPIC_API_KEY` |
 | Cleanup with DeepSeek (or any OpenAI-compatible LLM) | `FLOW_PROVIDER=openai-compatible`, `FLOW_API_KEY`, and optionally `FLOW_API_URL` / `FLOW_MODEL` |
 
+Provider selection defaults to **`auto`**: a cloud key wins if set, otherwise
+local NeMo when an NVIDIA GPU is present, otherwise mock.
+
 > Microphone capture requires a secure context: `localhost` is fine, remote
 > hosts need HTTPS.
+
+### Local transcription with NVIDIA NeMo (GPU)
+
+If the deployment server has an NVIDIA GPU, you can transcribe entirely
+on-device with [NVIDIA NeMo](https://github.com/NVIDIA/NeMo) — no cloud ASR key.
+The `nemo` provider is offered only when a GPU is detected (`nvidia-smi`);
+requesting it without one degrades gracefully to mock/cloud and says why.
+
+Prerequisites on the server:
+
+```bash
+pip install "nemo_toolkit[asr]"   # pulls in torch; use a CUDA-enabled build
+# ffmpeg must be on PATH (browser clips are webm/opus → 16 kHz mono WAV)
+```
+
+Then:
+
+```bash
+TRANSCRIPTION_PROVIDER=nemo NEMO_MODEL=nvidia/parakeet-tdt-0.6b-v2 npm start
+```
+
+The first request downloads and loads the model; subsequent ones reuse the
+cache. For a busy deployment, run a resident NeMo service that exposes an
+OpenAI-compatible `/audio/transcriptions` endpoint and use the
+`openai-compatible` provider pointed at it, so the model stays warm between
+requests (`scripts/nemo_transcribe.py` documents the tradeoff).
 
 ## Two ways to get audio in
 

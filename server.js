@@ -69,7 +69,8 @@ if (isDirectRun) {
     const f = flowConfig();
     console.log(`Whisper Flow clone → http://localhost:${PORT}`);
     console.log(
-      `  Stage 1 ASR:  ${a.mode === 'live' ? `live (${a.model})` : 'mock (no TRANSCRIPTION_API_KEY)'}`,
+      `  Stage 1 ASR:  ${a.provider}${a.model ? ` (${a.model})` : ''}` +
+        `${a.gpu ? ' · GPU detected' : ''}${a.reason ? ` · ${a.reason}` : ''}`,
     );
     console.log(
       `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,

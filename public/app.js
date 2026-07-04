@@ -142,12 +142,18 @@ async function loadHealth() {
   try {
     const res = await fetch('/api/health');
     const h = await res.json();
-    const asr = h.asr.mode === 'live' ? `ASR ${h.asr.model}` : 'ASR mock';
+    const asr =
+      h.asr.provider === 'nemo'
+        ? `ASR NeMo (${h.asr.model})`
+        : h.asr.provider === 'openai-compatible'
+          ? `ASR ${h.asr.model}`
+          : 'ASR mock';
     const flow =
       h.flow.provider === 'passthrough'
         ? 'Flow passthrough'
         : `Flow ${h.flow.model}`;
-    els.providers.textContent = `${asr} · ${flow}`;
+    const gpu = h.asr.gpu ? ' · GPU' : '';
+    els.providers.textContent = `${asr} · ${flow}${gpu}`;
   } catch {
     els.providers.textContent = 'server unreachable';
   }
