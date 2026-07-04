@@ -5,3 +5,7 @@ node_modules/
 uploads/
 tmp/
 dist/
+
+# Python
+__pycache__/
+*.pyc
