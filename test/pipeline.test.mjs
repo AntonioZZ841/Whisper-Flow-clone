@@ -112,6 +112,10 @@ after(() => {
 
 beforeEach(() => {
   for (const k of ENV_KEYS) delete process.env[k];
+  // Pin auto-resolution off local NeMo so the suite behaves identically on
+  // hosts with and without an NVIDIA GPU. The NeMo Node wiring is still
+  // covered directly via the NEMO_PYTHON stub interpreters below.
+  process.env.NEMO_ENABLED = 'false';
   lastAsrFilename = null;
 });
 
@@ -127,7 +131,8 @@ async function postAudio(filename = 'utterance.webm', type = 'audio/webm') {
 // ── Unit: provider selection ───────────────────────────────────────────────
 
 test('asrConfig: mock with no key/GPU, openai-compatible when a key is set', () => {
-  // This host has no NVIDIA GPU, so auto resolves to mock without a key.
+  // NEMO_ENABLED=false is pinned in beforeEach, so auto resolves to mock
+  // without a key even when the host has an NVIDIA GPU.
   assert.equal(asrConfig().provider, 'mock');
   process.env.TRANSCRIPTION_API_KEY = 'k';
   assert.equal(asrConfig().provider, 'openai-compatible');
