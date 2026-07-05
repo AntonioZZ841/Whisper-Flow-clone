@@ -1,7 +1,7 @@
 {
   "name": "whisper-flow-clone",
   "version": "0.1.0",
-  "description": "Open-source clone of Wispr Flow: browser dictation with a two-stage pipeline — Whisper-family ASR, then an LLM (Claude Haiku 4.5 by default, or any OpenAI-compatible API such as DeepSeek) rewrites the raw transcript into the text you meant to type.",
+  "description": "Open-source clone of Wispr Flow: browser dictation with a two-stage pipeline — Whisper-family ASR, then an LLM (Claude Sonnet 5 by default, or any OpenAI-compatible API such as DeepSeek) rewrites the raw transcript into the text you meant to type.",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -18,7 +18,7 @@
     "voice",
     "transcription",
     "claude",
-    "haiku-4-5",
+    "sonnet-5",
     "deepseek"
   ],
   "license": "MIT",

@@ -8,7 +8,7 @@
 // (DeepSeek, a local llama.cpp server, ...) can do the job instead.
 //
 // Providers:
-//   anthropic           ANTHROPIC_API_KEY set (default model claude-haiku-4-5)
+//   anthropic           ANTHROPIC_API_KEY set (default model claude-sonnet-5)
 //   openai-compatible   FLOW_API_KEY set (defaults target DeepSeek)
 //   passthrough         no key — the raw transcript is returned unchanged
 //
@@ -45,7 +45,7 @@ export function flowConfig() {
 
   const model =
     provider === 'anthropic'
-      ? process.env.FLOW_MODEL || 'claude-haiku-4-5'
+      ? process.env.FLOW_MODEL || 'claude-sonnet-5'
       : provider === 'openai-compatible'
         ? process.env.FLOW_MODEL || 'deepseek-chat'
         : null;
@@ -89,11 +89,11 @@ async function flowAnthropic(text, model, systemPrompt = SYSTEM_PROMPT, maxToken
   // an `ant auth login` profile.
   anthropicClient ??= new Anthropic();
 
-  // Haiku 4.5 (the default: fast + cheap, which is what dictation cleanup
-  // wants) runs without thinking and rejects `output_config.effort`.
-  // Sonnet/Opus-tier models run adaptive thinking when `thinking` is omitted,
-  // so there we disable it and pin low effort — a deliberate
-  // latency-over-depth trade for this short rewrite task.
+  // Sonnet/Opus-tier models (Sonnet 5 is the default) run adaptive thinking
+  // when `thinking` is omitted, so we disable it and pin low effort — a
+  // deliberate latency-over-depth trade for this short rewrite task. Haiku
+  // 4.5 (the budget option via FLOW_MODEL) runs without thinking and rejects
+  // `output_config.effort`, so those params are skipped there.
   const haiku = /haiku/i.test(model);
 
   const response = await anthropicClient.messages.create({

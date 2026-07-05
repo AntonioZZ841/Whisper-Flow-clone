@@ -85,7 +85,7 @@ before(async () => {
           id: 'msg_mock',
           type: 'message',
           role: 'assistant',
-          model: 'claude-haiku-4-5',
+          model: 'claude-sonnet-5',
           content: [{ type: 'text', text: JSON.stringify({ formatted: CLEANED }) }],
           stop_reason: 'end_turn',
           stop_sequence: null,
@@ -230,7 +230,7 @@ test('flowConfig: auto-selects provider from env', () => {
   assert.equal(flowConfig().provider, 'passthrough');
 
   process.env.ANTHROPIC_API_KEY = 'k';
-  assert.deepEqual(flowConfig(), { provider: 'anthropic', model: 'claude-haiku-4-5' });
+  assert.deepEqual(flowConfig(), { provider: 'anthropic', model: 'claude-sonnet-5' });
 
   delete process.env.ANTHROPIC_API_KEY;
   process.env.FLOW_API_KEY = 'k';
@@ -289,7 +289,7 @@ test('openai-compatible (DeepSeek-shaped) Flow cleans the transcript', async () 
   assert.equal(body.meta.flow.model, 'deepseek-chat');
 });
 
-test('anthropic (Claude Haiku 4.5) Flow cleans the transcript', async () => {
+test('anthropic (Claude Sonnet 5) Flow cleans the transcript', async () => {
   process.env.ANTHROPIC_API_KEY = 'k';
   process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${mockPort}`;
 
@@ -297,7 +297,7 @@ test('anthropic (Claude Haiku 4.5) Flow cleans the transcript', async () => {
   assert.equal(status, 200);
   assert.equal(body.formatted, CLEANED);
   assert.equal(body.meta.flow.provider, 'anthropic');
-  assert.equal(body.meta.flow.model, 'claude-haiku-4-5');
+  assert.equal(body.meta.flow.model, 'claude-sonnet-5');
 });
 
 // ── Integration: uploaded recording ─────────────────────────────────────────
