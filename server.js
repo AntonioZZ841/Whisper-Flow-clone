@@ -140,7 +140,11 @@ if (isDirectRun) {
     );
     const m = asrConfig({ diarize: true });
     if (m.provider !== a.provider) {
-      console.log(`                meetings: ${m.provider}${m.model ? ` (${m.model})` : ''} · speaker labeling`);
+      const detail =
+        m.provider === 'hybrid'
+          ? 'whisper words + nemo speakers (multilingual)'
+          : `${m.provider}${m.model ? ` (${m.model})` : ''}`;
+      console.log(`                meetings: ${detail} · speaker labeling`);
     }
     if (a.provider === 'nemo' || m.provider === 'nemo') {
       // A shell-exported NEMO_PYTHON silently beats .env (dotenv never

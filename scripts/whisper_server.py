@@ -82,6 +82,9 @@ def transcribe():
     if upload is None:
         return jsonify({"error": "no `file` field in the multipart form"}), 400
     language = request.form.get("language") or None  # None = auto-detect
+    # Extension beyond the OpenAI surface: per-word timestamps, used by the
+    # app's hybrid meeting mode to merge words with speaker segments.
+    want_words = request.form.get("word_timestamps") == "true"
 
     suffix = os.path.splitext(upload.filename or "")[1] or ".webm"
     fd, path = tempfile.mkstemp(suffix=suffix)
@@ -90,9 +93,22 @@ def transcribe():
             upload.save(f)
         # vad_filter trims leading/trailing silence, which also keeps Whisper
         # from hallucinating text for silent or non-speech clips.
-        segments, info = model.transcribe(path, language=language, vad_filter=True)
-        text = "".join(segment.text for segment in segments).strip()
-        return jsonify({"text": text, "language": info.language})
+        segments, info = model.transcribe(
+            path, language=language, vad_filter=True, word_timestamps=want_words
+        )
+        out_words = []
+        texts = []
+        for segment in segments:  # generator — consume once
+            texts.append(segment.text)
+            if want_words:
+                for w in segment.words or []:
+                    out_words.append(
+                        {"word": w.word, "start": round(w.start, 2), "end": round(w.end, 2)}
+                    )
+        result = {"text": "".join(texts).strip(), "language": info.language}
+        if want_words:
+            result["words"] = out_words
+        return jsonify(result)
     except Exception as exc:  # noqa: BLE001 — answer the request, stay alive
         return jsonify({"error": str(exc)[:300]}), 500
     finally:

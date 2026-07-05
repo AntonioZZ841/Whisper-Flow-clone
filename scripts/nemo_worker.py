@@ -27,6 +27,7 @@ import sys
 from nemo_transcribe import (
     DEFAULT_MODEL,
     diarize_turns,
+    extract_speaker_segments,
     extract_text,
     extract_word_spans,
     to_wav_16k_mono,
@@ -91,6 +92,21 @@ def handle(req):
         if req.get("warm"):
             get_asr()
             send({"id": rid, "ok": True})
+            return
+
+        # Speaker segments only — no ASR. Used by the hybrid meeting mode,
+        # where a multilingual Whisper server supplies the words and this
+        # (language-agnostic) diarizer supplies who spoke when.
+        if req.get("segments_only"):
+            wav = to_wav_16k_mono(req["path"])
+            try:
+                segments = extract_speaker_segments(get_diar().diarize(audio=[wav], batch_size=1))
+                send({"id": rid, "segments": segments})
+            finally:
+                try:
+                    os.remove(wav)
+                except OSError:
+                    pass
             return
 
         diarize = bool(req.get("diarize"))

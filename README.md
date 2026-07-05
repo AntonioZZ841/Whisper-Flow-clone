@@ -146,10 +146,11 @@ TRANSCRIPTION_API_URL=http://127.0.0.1:8756/v1/audio/transcriptions
 Whisper `large-v3` auto-detects the language per utterance, so English
 dictation keeps working and 中英混说 comes out right; the Flow stage then
 cleans the transcript in the language(s) spoken — Mandarin fillers (嗯/呃)
-removed, Chinese punctuation, code-switched words kept as spoken. Meeting
-uploads still route to NeMo + Sortformer for speaker labels (English audio;
-`/api/health` shows the active split as `asr.provider` vs
-`asr.meeting_provider`).
+removed, Chinese punctuation, code-switched words kept as spoken. With the
+Whisper server configured, meeting uploads route to the **hybrid** provider
+(Whisper words + Sortformer speaker segments), so labeled meetings are
+multilingual too. `/api/health` shows the active split as `asr.provider` vs
+`asr.meeting_provider`.
 
 > Microphone capture requires a secure context: `localhost` is fine, remote
 > hosts need HTTPS.
@@ -223,10 +224,14 @@ preserving the labels. The response carries both the labeled text (`raw`,
 
 Notes:
 
-- Needs the local **NeMo provider** (GPU). The cloud `openai-compatible`
-  provider has no diarization concept — you get an unlabeled transcript plus
-  a warning. Keyless mock mode returns a canned two-person exchange so the
-  UI can be exercised without a GPU.
+- Needs the local **NeMo diarizer** (GPU). When the local Whisper server is
+  also configured, meetings run **hybrid**: Whisper supplies multilingual,
+  word-timestamped text and Sortformer supplies who-spoke-when, merged by
+  timestamp — so meetings work in Mandarin and code-switched speech too, and
+  English meetings get Whisper-quality transcription. Without a Whisper/cloud
+  key, meetings run pure NeMo (English audio). Without a GPU at all, you get
+  an unlabeled transcript plus a warning; keyless mock mode returns a canned
+  two-person exchange so the UI can be exercised anywhere.
 - Speakers are labeled by order of first appearance (`Speaker 1`, `Speaker
   2`, …) — telling voices apart, not recognizing *whose* voice; no voice
   profiles are stored.

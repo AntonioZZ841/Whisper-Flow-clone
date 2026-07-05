@@ -73,19 +73,22 @@ export function resolveAsr(env, gpu, { diarize = false } = {}) {
   } else if (explicit === 'mock') {
     provider = 'mock';
   } else {
-    // auto routes per mode. Meetings prefer local NeMo — it is the only
-    // provider that can label speakers. Plain dictation lets a configured
-    // key win (e.g. a local multilingual Whisper server for Mandarin and
-    // code-switched speech), then NeMo on a GPU box, then the keyless mock.
+    // auto routes per mode. Meetings need speaker labels, which only the
+    // local NeMo diarizer provides; when a Whisper key is also configured,
+    // meetings run `hybrid` — Whisper supplies the words (multilingual,
+    // word-timestamped) and Sortformer supplies who spoke when. Plain
+    // dictation lets a configured key win, then NeMo on a GPU box, then the
+    // keyless mock.
     const nemoAvailable = gpu && env.NEMO_ENABLED !== 'false';
-    if (diarize && nemoAvailable) provider = 'nemo';
+    if (diarize && nemoAvailable && env.TRANSCRIPTION_API_KEY) provider = 'hybrid';
+    else if (diarize && nemoAvailable) provider = 'nemo';
     else if (env.TRANSCRIPTION_API_KEY) provider = 'openai-compatible';
     else if (nemoAvailable) provider = 'nemo';
     else provider = 'mock';
   }
 
   const model =
-    provider === 'openai-compatible'
+    provider === 'openai-compatible' || provider === 'hybrid'
       ? env.TRANSCRIPTION_MODEL || 'whisper-1'
       : provider === 'nemo'
         ? env.NEMO_MODEL || DEFAULT_NEMO_MODEL
@@ -114,6 +117,9 @@ export async function transcribe(file, { diarize = false } = {}) {
   if (cfg.provider === 'nemo') {
     return transcribeWithNemo(file, cfg.model, { diarize });
   }
+  if (cfg.provider === 'hybrid') {
+    return transcribeHybridMeeting(file, cfg.model);
+  }
   const out = await transcribeOpenAICompatible(file, cfg.model);
   if (diarize) {
     // /audio/transcriptions has no diarization concept — be explicit rather
@@ -126,7 +132,11 @@ export async function transcribe(file, { diarize = false } = {}) {
 
 // ── openai-compatible (OpenAI / whisper.cpp / faster-whisper) ───────────────
 
-async function transcribeOpenAICompatible({ buffer, path: filePath, mimetype, originalname }, model) {
+async function transcribeOpenAICompatible(
+  { buffer, path: filePath, mimetype, originalname },
+  model,
+  { wordTimestamps = false } = {},
+) {
   const url =
     process.env.TRANSCRIPTION_API_URL ||
     'https://api.openai.com/v1/audio/transcriptions';
@@ -141,6 +151,9 @@ async function transcribeOpenAICompatible({ buffer, path: filePath, mimetype, or
   const form = new FormData();
   form.append('file', blob, originalname || 'audio.webm');
   form.append('model', model);
+  // Extension honored by the bundled local Whisper server (harmless
+  // elsewhere): per-word timestamps for the hybrid meeting merge.
+  if (wordTimestamps) form.append('word_timestamps', 'true');
 
   const res = await fetch(url, {
     method: 'POST',
@@ -153,7 +166,12 @@ async function transcribeOpenAICompatible({ buffer, path: filePath, mimetype, or
     );
   }
   const data = await res.json();
-  return { text: (data.text ?? '').trim(), mock: false, provider: 'openai-compatible' };
+  return {
+    text: (data.text ?? '').trim(),
+    ...(Array.isArray(data.words) ? { words: data.words } : {}),
+    mock: false,
+    provider: 'openai-compatible',
+  };
 }
 
 // ── NVIDIA NeMo (local, GPU) ────────────────────────────────────────────────
@@ -193,6 +211,103 @@ export async function transcribeWithNemo(
   await writeFile(inPath, buffer);
   try {
     return fromResult(await run(inPath));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+// ── Hybrid meetings (multilingual words + language-agnostic speakers) ──────
+//
+// The NeMo ASR model is English-only, but its Sortformer diarizer segments
+// by voice, not language. The hybrid provider pairs the multilingual Whisper
+// server's word timestamps with Sortformer's speaker segments, merged the
+// same way the pure-NeMo sidecar merges Parakeet words — so meetings work in
+// Mandarin (and code-switched speech) too.
+
+// Assign each word to the speaker segment covering its midpoint (nearest
+// segment when none does), merge same-speaker runs into turns, and label
+// speakers in order of first appearance. Mirrors merge_into_turns in
+// scripts/nemo_transcribe.py.
+export function mergeWordsIntoTurns(words, segments) {
+  if (!words?.length || !segments?.length) return null;
+
+  const speakerAt = (t) => {
+    let nearest = segments[0][2];
+    let nearestDist = Infinity;
+    for (const [start, end, label] of segments) {
+      if (start <= t && t <= end) return label;
+      const d = Math.min(Math.abs(start - t), Math.abs(end - t));
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = label;
+      }
+    }
+    return nearest;
+  };
+
+  const runs = [];
+  for (const w of words) {
+    if (typeof w?.start !== 'number' || typeof w?.end !== 'number') continue;
+    const label = speakerAt((w.start + w.end) / 2);
+    const last = runs[runs.length - 1];
+    if (last && last.label === label) {
+      last.end = w.end;
+      last.words.push(w.word);
+    } else {
+      runs.push({ label, start: w.start, end: w.end, words: [String(w.word ?? '')] });
+    }
+  }
+  if (!runs.length) return null;
+
+  const names = new Map();
+  for (const r of runs) if (!names.has(r.label)) names.set(r.label, `Speaker ${names.size + 1}`);
+  return runs.map((r) => ({
+    speaker: names.get(r.label),
+    start: Math.round(r.start * 100) / 100,
+    end: Math.round(r.end * 100) / 100,
+    // Whisper's English word tokens carry their own leading spaces and
+    // Chinese tokens carry none — plain concatenation is right for both.
+    text: r.words.join('').trim(),
+  }));
+}
+
+export async function transcribeHybridMeeting(file, model) {
+  const run = async (f) => {
+    // Speaker segmentation and transcription are independent — run them
+    // concurrently. A diarizer failure degrades to an unlabeled transcript
+    // (labeling is best-effort); a transcription failure fails the request.
+    const segmentsPromise = requestNemoWorker(process.env.NEMO_MODEL || DEFAULT_NEMO_MODEL, {
+      path: f.path,
+      segments_only: true,
+    }).then(
+      (r) => ({ segments: r.segments }),
+      (err) => ({ error: String(err?.message ?? err) }),
+    );
+    const asr = await transcribeOpenAICompatible(f, model, { wordTimestamps: true });
+    const seg = await segmentsPromise;
+
+    const turns = seg.error ? null : mergeWordsIntoTurns(asr.words, seg.segments);
+    const warning = seg.error
+      ? `speaker labeling failed: ${seg.error}`
+      : turns
+        ? undefined
+        : 'no speaker segments detected — returning an unlabeled transcript';
+    return {
+      text: asr.text,
+      turns: turns ?? null,
+      ...(warning ? { warning } : {}),
+      mock: false,
+      provider: 'hybrid',
+    };
+  };
+
+  if (file.path) return run(file);
+  // Direct callers may pass a buffer; the diarizer needs a file on disk.
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'hybrid-'));
+  const inPath = path.join(dir, path.basename(file.originalname || 'audio.webm'));
+  await writeFile(inPath, file.buffer);
+  try {
+    return await run({ ...file, path: inPath });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

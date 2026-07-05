@@ -22,6 +22,8 @@ import {
   resolveAsr,
   transcribe,
   transcribeWithNemo,
+  transcribeHybridMeeting,
+  mergeWordsIntoTurns,
   stopNemoWorker,
 } from '../src/asr.js';
 import { flowConfig, flow } from '../src/flow.js';
@@ -75,6 +77,19 @@ before(async () => {
       };
       if (req.url.includes('/audio/transcriptions')) {
         lastAsrFilename = (body.match(/filename="([^"]+)"/) || [])[1] || null;
+        // Mirror the local Whisper server's extension: per-word timestamps
+        // when the form asks for them (used by hybrid meeting mode).
+        if (body.includes('word_timestamps')) {
+          return send({
+            text: 'hello there general kenobi',
+            words: [
+              { word: ' hello', start: 0.1, end: 0.5 },
+              { word: ' there', start: 0.6, end: 1.0 },
+              { word: ' general', start: 1.5, end: 2.0 },
+              { word: ' kenobi', start: 2.1, end: 2.6 },
+            ],
+          });
+        }
         return send({ text: ASR_TEXT });
       }
       if (req.url.includes('/chat/completions')) {
@@ -135,6 +150,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
   case "$line" in
     *'"warm":true'*) printf '{"id": %s, "ok": true}\\n' "$id" ;;
+    *'"segments_only":true'*) printf '{"id": %s, "segments": [[0, 1.2, "speaker_0"], [1.4, 2.8, "speaker_1"]]}\\n' "$id" ;;
     *'"diarize":true'*) printf '{"id": %s, "text": "warm hello there", "turns": [{"speaker": "Speaker 1", "start": 0, "end": 1, "text": "warm hello"}, {"speaker": "Speaker 2", "start": 1.2, "end": 2, "text": "there"}]}\\n' "$id" ;;
     *) printf '{"id": %s, "text": "warm hello from pid %s"}\\n' "$id" "$$" ;;
   esac
@@ -206,12 +222,14 @@ test('resolveAsr: GPU presence and overrides drive provider selection', () => {
   // NEMO_ENABLED=false keeps auto off NeMo on a GPU box
   assert.equal(resolveAsr({ NEMO_ENABLED: 'false' }, true).provider, 'mock');
   // Per-mode routing: with a cloud/Whisper key on a GPU box, plain dictation
-  // goes to the key'd provider (multilingual), meetings go to NeMo (the only
-  // provider that labels speakers).
+  // goes to the key'd provider (multilingual), meetings go hybrid — Whisper
+  // words merged with NeMo speaker segments.
   const env = { TRANSCRIPTION_API_KEY: 'k' };
   assert.equal(resolveAsr(env, true).provider, 'openai-compatible');
-  assert.equal(resolveAsr(env, true, { diarize: true }).provider, 'nemo');
-  // ...but meetings without a GPU fall back to the key'd provider,
+  assert.equal(resolveAsr(env, true, { diarize: true }).provider, 'hybrid');
+  // No key on a GPU box → meetings run pure NeMo,
+  assert.equal(resolveAsr({}, true, { diarize: true }).provider, 'nemo');
+  // ...and meetings without a GPU fall back to the key'd provider,
   assert.equal(resolveAsr(env, false, { diarize: true }).provider, 'openai-compatible');
   // and an explicit provider override applies to both modes.
   assert.equal(
@@ -404,6 +422,62 @@ test('transcribeWithNemo: surfaces a non-zero exit from the sidecar', async () =
     () => transcribeWithNemo({ buffer: Buffer.from('x'), originalname: 'c.webm' }, 'm'),
     /NeMo transcriber exited 1.*boom/s,
   );
+});
+
+// ── Hybrid meetings (Whisper words + Sortformer speakers) ──────────────────
+
+test('mergeWordsIntoTurns: midpoint assignment, nearest-segment fallback, first-appearance labels', () => {
+  const words = [
+    { word: '你好', start: 0.1, end: 0.4 },
+    { word: '大家', start: 0.5, end: 0.9 },
+    { word: ' okay', start: 1.02, end: 1.14 }, // gap word — nearest segment wins (0.07 vs 0.42)
+    { word: '我们', start: 1.6, end: 2.0 },
+    { word: '开始', start: 2.1, end: 2.5 },
+  ];
+  const segments = [
+    [0, 1.0, 'speaker_1'],
+    [1.5, 2.6, 'speaker_0'],
+  ];
+  const turns = mergeWordsIntoTurns(words, segments);
+  assert.equal(turns.length, 2);
+  assert.deepEqual(turns[0], { speaker: 'Speaker 1', start: 0.1, end: 1.14, text: '你好大家 okay' });
+  assert.deepEqual(turns[1], { speaker: 'Speaker 2', start: 1.6, end: 2.5, text: '我们开始' });
+  // Degenerate inputs degrade to null (caller emits an unlabeled warning).
+  assert.equal(mergeWordsIntoTurns([], segments), null);
+  assert.equal(mergeWordsIntoTurns(words, []), null);
+});
+
+test('transcribeHybridMeeting: whisper words + worker segments → labeled turns', async () => {
+  process.env.TRANSCRIPTION_API_KEY = 'k';
+  process.env.TRANSCRIPTION_API_URL = mockUrl('/v1/audio/transcriptions');
+  process.env.NEMO_PYTHON = stubWorker;
+  stopNemoWorker();
+
+  const out = await transcribeHybridMeeting(
+    { buffer: Buffer.from('audio'), originalname: 'meeting.webm' },
+    'whisper-1',
+  );
+  assert.equal(out.provider, 'hybrid');
+  assert.equal(out.text, 'hello there general kenobi');
+  assert.equal(out.turns.length, 2);
+  assert.deepEqual(out.turns[0], { speaker: 'Speaker 1', start: 0.1, end: 1, text: 'hello there' });
+  assert.deepEqual(out.turns[1], { speaker: 'Speaker 2', start: 1.5, end: 2.6, text: 'general kenobi' });
+});
+
+test('transcribeHybridMeeting: diarizer failure degrades to unlabeled transcript', async () => {
+  process.env.TRANSCRIPTION_API_KEY = 'k';
+  process.env.TRANSCRIPTION_API_URL = mockUrl('/v1/audio/transcriptions');
+  process.env.NEMO_PYTHON = stubWorkerDie;
+  stopNemoWorker();
+
+  const out = await transcribeHybridMeeting(
+    { buffer: Buffer.from('audio'), originalname: 'meeting.webm' },
+    'whisper-1',
+  );
+  assert.equal(out.text, 'hello there general kenobi'); // dictation never lost
+  assert.equal(out.turns, null);
+  assert.match(out.warning, /speaker labeling failed/);
+  stopNemoWorker(); // don't leave the dead-worker stub armed for later tests
 });
 
 // ── Resident NeMo worker (default path: models stay loaded) ────────────────
