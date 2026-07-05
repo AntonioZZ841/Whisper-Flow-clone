@@ -20,6 +20,7 @@ const els = {
   file: document.getElementById('file'),
   drop: document.getElementById('drop'),
   fileName: document.getElementById('file-name'),
+  diarize: document.getElementById('diarize'),
 };
 
 // Presses shorter than this toggle hands-free mode; longer ones behave like
@@ -125,7 +126,9 @@ function uploadFile(file) {
     return;
   }
   els.fileName.textContent = `${file.name} · ${(file.size / 1024).toFixed(0)} KB`;
-  send(file, file.name);
+  // Speaker labeling only makes sense for uploaded recordings — live
+  // push-to-talk dictation is by definition a single voice.
+  send(file, file.name, { diarize: els.diarize.checked });
 }
 
 function isEditable(t) {
@@ -292,14 +295,15 @@ function stopMeter() {
 
 // ── Pipeline round-trip ─────────────────────────────────────────────────
 
-async function send(blob, filename = 'utterance.webm') {
+async function send(blob, filename = 'utterance.webm', { diarize = false } = {}) {
   state.busy = true;
-  setStatus('busy', 'transcribing + formatting…');
+  setStatus('busy', diarize ? 'transcribing + labeling speakers…' : 'transcribing + formatting…');
 
   const fd = new FormData();
   // Preserve the filename — Whisper-style ASR uses the extension to detect
   // the audio format, so an uploaded recording.wav must arrive as .wav.
   fd.append('audio', blob, filename);
+  if (diarize) fd.append('diarize', 'true');
 
   try {
     const res = await fetch('/api/transcribe', { method: 'POST', body: fd });
@@ -309,7 +313,9 @@ async function send(blob, filename = 'utterance.webm') {
     els.raw.textContent = data.raw || '(silence)';
     insertAtCursor(data.formatted || '');
     refreshOutputs();
-    setStatus('idle', data.meta?.asr?.mock ? 'done (mock ASR)' : 'done');
+    const warning = data.meta?.asr?.warning;
+    if (warning) setStatus('idle', `done — ${warning}`);
+    else setStatus('idle', data.meta?.asr?.mock ? 'done (mock ASR)' : 'done');
   } catch (err) {
     setStatus('error', String(err.message || err));
   } finally {
@@ -323,7 +329,8 @@ function insertAtCursor(text) {
   if (!text) return;
   const ta = els.formatted;
   const before = ta.value.slice(0, ta.selectionStart);
-  const sep = before && !/\s$/.test(before) ? ' ' : '';
+  // Multi-line insertions (labeled meeting transcripts) get their own block.
+  const sep = before && !/\s$/.test(before) ? (text.includes('\n') ? '\n\n' : ' ') : '';
   ta.setRangeText(sep + text, ta.selectionStart, ta.selectionEnd, 'end');
 }
 

@@ -271,6 +271,18 @@ body {
   font-size: 0.92rem;
 }
 
+.upload__diarize {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.upload__diarize input {
+  accent-color: var(--accent);
+}
+
 /* ── Output panes ───────────────────────────────────────────────────── */
 
 .panes {

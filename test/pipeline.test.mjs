@@ -51,6 +51,7 @@ const ENV_KEYS = [
 let stubDir;
 let stubOk;
 let stubNoisy;
+let stubDiar;
 let stubFail;
 
 before(async () => {
@@ -97,6 +98,7 @@ before(async () => {
   stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nemo-stub-'));
   stubOk = path.join(stubDir, 'ok.sh');
   stubNoisy = path.join(stubDir, 'noisy.sh');
+  stubDiar = path.join(stubDir, 'diar.sh');
   stubFail = path.join(stubDir, 'fail.sh');
   // Args ($1=script path, $2=audio path) are ignored — we only exercise the
   // Node-side spawn/parse contract. The noisy stub mimics real NeMo, whose
@@ -107,8 +109,14 @@ before(async () => {
     '#!/bin/sh\necho "[NeMo I 2026-07-05 mixins:184] Tokenizer initialized with 1024 tokens"\necho "loading checkpoint 100%"\necho \'{"text":"hey from noisy nemo"}\'\n',
   );
   fs.writeFileSync(stubFail, '#!/bin/sh\necho "boom" >&2\nexit 1\n');
+  // Mimics the sidecar's meeting mode: turns only when --diarize is passed.
+  fs.writeFileSync(
+    stubDiar,
+    '#!/bin/sh\ncase "$*" in\n*--diarize*) echo \'{"text":"hello there general kenobi","turns":[{"speaker":"Speaker 1","start":0,"end":1.1,"text":"hello there"},{"speaker":"Speaker 2","start":1.4,"end":2.6,"text":"general kenobi"}]}\';;\n*) echo \'{"text":"hello there general kenobi"}\';;\nesac\n',
+  );
   fs.chmodSync(stubOk, 0o755);
   fs.chmodSync(stubNoisy, 0o755);
+  fs.chmodSync(stubDiar, 0o755);
   fs.chmodSync(stubFail, 0o755);
 });
 
@@ -129,9 +137,10 @@ beforeEach(() => {
 
 const mockUrl = (p) => `http://127.0.0.1:${mockPort}${p}`;
 
-async function postAudio(filename = 'utterance.webm', type = 'audio/webm') {
+async function postAudio(filename = 'utterance.webm', type = 'audio/webm', fields = {}) {
   const fd = new FormData();
   fd.append('audio', new Blob([Buffer.from('not-real-audio-mock-asr-ignores-bytes')], { type }), filename);
+  for (const [k, v] of Object.entries(fields)) fd.append(k, v);
   const r = await fetch(`http://127.0.0.1:${appPort}/api/transcribe`, { method: 'POST', body: fd });
   return { status: r.status, body: await r.json() };
 }
@@ -295,6 +304,39 @@ test('transcribeWithNemo: writes a temp file, runs the sidecar, parses JSON', as
     'nvidia/parakeet-tdt-0.6b-v2',
   );
   assert.deepEqual(out, { text: 'hey from nemo', mock: false, provider: 'nemo' });
+});
+
+test('transcribeWithNemo: --diarize is forwarded and speaker turns are parsed', async () => {
+  process.env.NEMO_PYTHON = stubDiar;
+  const plain = await transcribeWithNemo(
+    { buffer: Buffer.from('audio'), originalname: 'meeting.wav' },
+    'm',
+  );
+  assert.equal(plain.text, 'hello there general kenobi');
+  assert.equal('turns' in plain, false); // no meeting mode → no turns key
+
+  const meeting = await transcribeWithNemo(
+    { buffer: Buffer.from('audio'), originalname: 'meeting.wav' },
+    'm',
+    { diarize: true },
+  );
+  assert.equal(meeting.turns.length, 2);
+  assert.deepEqual(meeting.turns[1], {
+    speaker: 'Speaker 2',
+    start: 1.4,
+    end: 2.6,
+    text: 'general kenobi',
+  });
+});
+
+test('keyless meeting mode: mock ASR returns labeled speaker turns', async () => {
+  const { status, body } = await postAudio('standup.wav', 'audio/wav', { diarize: 'true' });
+  assert.equal(status, 200);
+  assert.ok(body.turns.length >= 2);
+  assert.equal(body.turns[0].speaker, 'Speaker 1');
+  assert.match(body.raw, /^Speaker 1: /);
+  assert.match(body.raw, /\nSpeaker 2: /);
+  assert.equal(body.formatted, body.raw); // passthrough Flow leaves it as-is
 });
 
 test('transcribeWithNemo: tolerates NeMo log noise on stdout before the JSON', async () => {

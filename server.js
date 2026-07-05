@@ -63,13 +63,23 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     return res.status(400).json({ error: 'No audio file was uploaded.' });
   }
   try {
-    const asr = await transcribe(req.file);
-    const flowed = await flow(asr.text);
+    // diarize=true (meeting mode) labels who said what — supported by the
+    // local NeMo provider; mock returns a canned two-person exchange.
+    const diarize = req.body?.diarize === 'true';
+    const asr = await transcribe(req.file, { diarize });
+
+    const meeting = Boolean(asr.turns?.length);
+    const raw = meeting
+      ? asr.turns.map((t) => `${t.speaker}: ${t.text}`).join('\n')
+      : asr.text;
+    const flowed = await flow(raw, { meeting });
+
     res.json({
-      raw: asr.text,
+      raw,
       formatted: flowed.text,
+      ...(diarize ? { turns: asr.turns ?? null } : {}),
       meta: {
-        asr: { mock: asr.mock },
+        asr: { mock: asr.mock, ...(asr.warning ? { warning: asr.warning } : {}) },
         flow: {
           provider: flowed.provider,
           model: flowed.model,

@@ -26,6 +26,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_TRANSCRIPT =
   'um so hey can you move our sync to monday no wait actually tuesday at uh 3 p.m. and um also like send the notes uh send the notes to everyone after';
 
+// Keyless demo for meeting mode: a canned two-person exchange, disfluent like
+// real ASR output so the Flow stage has something to clean per turn.
+const MOCK_TURNS = [
+  { speaker: 'Speaker 1', start: 0, end: 4.1, text: 'um so are we still on for the quarterly review on monday no wait actually thursday' },
+  { speaker: 'Speaker 2', start: 4.4, end: 7.9, text: 'uh yeah thursday works for me can you um can you send the invite' },
+  { speaker: 'Speaker 1', start: 8.2, end: 10.5, text: 'sure I will I will send it right after lunch' },
+];
+
 const DEFAULT_NEMO_MODEL = 'nvidia/parakeet-tdt-0.6b-v2';
 
 // Detect an NVIDIA GPU via `nvidia-smi`. Cached — the answer can't change
@@ -85,15 +93,30 @@ export function asrConfig() {
   return resolveAsr(process.env, hasNvidiaGpu());
 }
 
-export async function transcribe(file) {
+export async function transcribe(file, { diarize = false } = {}) {
   const cfg = asrConfig();
   if (cfg.provider === 'mock') {
+    if (diarize) {
+      return {
+        text: MOCK_TURNS.map((t) => `${t.speaker}: ${t.text}`).join('\n'),
+        turns: MOCK_TURNS,
+        mock: true,
+        provider: 'mock',
+      };
+    }
     return { text: MOCK_TRANSCRIPT, mock: true, provider: 'mock' };
   }
   if (cfg.provider === 'nemo') {
-    return transcribeWithNemo(file, cfg.model);
+    return transcribeWithNemo(file, cfg.model, { diarize });
   }
-  return transcribeOpenAICompatible(file, cfg.model);
+  const out = await transcribeOpenAICompatible(file, cfg.model);
+  if (diarize) {
+    // /audio/transcriptions has no diarization concept — be explicit rather
+    // than silently dropping the request.
+    out.turns = null;
+    out.warning = 'speaker labeling requires the local NeMo provider — returning an unlabeled transcript';
+  }
+  return out;
 }
 
 // ── openai-compatible (OpenAI / whisper.cpp / faster-whisper) ───────────────
@@ -135,30 +158,41 @@ async function transcribeOpenAICompatible({ buffer, path: filePath, mimetype, or
 // prints {"text": ...}. Node stays the orchestrator; the GPU work lives in
 // Python, where NeMo actually runs. Exported for direct testing.
 
-export async function transcribeWithNemo({ buffer, path: filePath, originalname }, model) {
+export async function transcribeWithNemo(
+  { buffer, path: filePath, originalname },
+  model,
+  { diarize = false } = {},
+) {
+  const fromResult = (r) => ({
+    text: String(r.text ?? '').trim(),
+    ...(diarize ? { turns: r.turns ?? null } : {}),
+    ...(r.warning ? { warning: String(r.warning) } : {}),
+    mock: false,
+    provider: 'nemo',
+  });
+
   // Disk-spooled uploads already sit in a temp file (extension preserved by
   // the upload layer) — hand that path straight to the sidecar. The buffer
   // branch serves direct callers that never touched disk.
   if (filePath) {
-    const text = await runNemo(filePath, model);
-    return { text: text.trim(), mock: false, provider: 'nemo' };
+    return fromResult(await runNemo(filePath, model, diarize));
   }
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nemo-'));
   const inPath = path.join(dir, path.basename(originalname || 'audio.webm'));
   await writeFile(inPath, buffer);
   try {
-    const text = await runNemo(inPath, model);
-    return { text: text.trim(), mock: false, provider: 'nemo' };
+    return fromResult(await runNemo(inPath, model, diarize));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 }
 
-function runNemo(inPath, model) {
+function runNemo(inPath, model, diarize = false) {
   return new Promise((resolve, reject) => {
     const py = process.env.NEMO_PYTHON || 'python3';
     const script = path.join(__dirname, '..', 'scripts', 'nemo_transcribe.py');
-    const proc = spawn(py, [script, inPath], {
+    const args = [script, inPath, ...(diarize ? ['--diarize'] : [])];
+    const proc = spawn(py, args, {
       env: { ...process.env, NEMO_MODEL: model },
     });
 
@@ -184,7 +218,7 @@ function runNemo(inPath, model) {
           continue;
         }
         if (parsed && typeof parsed === 'object' && 'text' in parsed) {
-          return resolve(String(parsed.text ?? ''));
+          return resolve(parsed);
         }
       }
       reject(new Error(`NeMo transcriber returned unexpected output: ${out.slice(-200)}`));

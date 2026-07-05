@@ -172,6 +172,37 @@ OpenAI-compatible `/audio/transcriptions` endpoint and use the
 `openai-compatible` provider pointed at it, so the model stays warm between
 requests (`scripts/nemo_transcribe.py` documents the tradeoff).
 
+### Meeting transcription — who said what (speaker diarization)
+
+Tick **“Label speakers”** next to the upload zone (or POST with a
+`diarize=true` form field) and the transcript comes back segmented by voice:
+
+```
+Speaker 1: Are we still on for the quarterly review on Thursday?
+Speaker 2: Yes, Thursday works for me. Can you send the invite?
+```
+
+How it works: the ASR pass also emits word timestamps, NVIDIA **Sortformer**
+(`nvidia/diar_sortformer_4spk-v1`, up to 4 speakers) segments the audio by
+voice on the same GPU, and the sidecar merges the two — each word goes to the
+speaker whose segment covers it. The Flow stage then cleans each turn while
+preserving the labels. The response carries both the labeled text (`raw`,
+`formatted`) and structured `turns` (`{speaker, start, end, text}`).
+
+Notes:
+
+- Needs the local **NeMo provider** (GPU). The cloud `openai-compatible`
+  provider has no diarization concept — you get an unlabeled transcript plus
+  a warning. Keyless mock mode returns a canned two-person exchange so the
+  UI can be exercised without a GPU.
+- Speakers are labeled by order of first appearance (`Speaker 1`, `Speaker
+  2`, …) — telling voices apart, not recognizing *whose* voice; no voice
+  profiles are stored.
+- The first meeting request downloads the diarization model (~700 MB);
+  override with `NEMO_DIAR_MODEL`. If diarization fails, the transcript is
+  still returned unlabeled with a warning — labeling degrades, dictation is
+  never lost.
+
 ## Two ways to get audio in
 
 - **Speak live** — hold the button (or the space bar) and talk; release to
@@ -187,8 +218,9 @@ Both go through the exact same `ASR → Flow` pipeline.
 ## API
 
 - `POST /api/transcribe` — multipart form with an `audio` file (a live-recorded
-  blob or an uploaded file). Returns `{ raw, formatted, meta }` where `meta`
-  reports which providers ran.
+  blob or an uploaded file), plus optional `diarize=true` for meeting mode.
+  Returns `{ raw, formatted, meta }` — with `diarize`, also `turns:
+  [{speaker, start, end, text}] | null` and speaker-labeled `raw`/`formatted`.
 - `GET /api/health` — `{ ok, asr: {mode, model}, flow: {provider, model} }`.
 
 ## Testing
