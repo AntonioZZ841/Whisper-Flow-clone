@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transcribe, asrConfig, warmNemo } from './src/asr.js';
-import { flow, flowConfig } from './src/flow.js';
+import { flow, flowMeeting, flowConfig } from './src/flow.js';
 import { getLanIPv4s } from './src/net.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -96,7 +96,9 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     const raw = meeting
       ? asr.turns.map((t) => `${t.speaker}: ${t.text}`).join('\n')
       : asr.text;
-    const flowed = await flow(raw, { meeting });
+    // Meetings clean per-turn with labels reattached server-side (they can
+    // never be lost by the model); plain dictation cleans as one utterance.
+    const flowed = meeting ? await flowMeeting(asr.turns) : await flow(raw);
 
     res.json({
       raw,

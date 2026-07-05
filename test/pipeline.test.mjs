@@ -96,12 +96,19 @@ before(async () => {
         return send({ choices: [{ message: { role: 'assistant', content: CLEANED } }] });
       }
       if (req.url.includes('/v1/messages')) {
+        // Dictation requests carry plain text; meeting requests carry a JSON
+        // array of turn texts and expect {texts: [...]} back (same length).
+        let payload = { formatted: CLEANED };
+        try {
+          const arr = JSON.parse(JSON.parse(body).messages[0].content);
+          if (Array.isArray(arr)) payload = { texts: arr.map((_, i) => `clean#${i}`) };
+        } catch {}
         return send({
           id: 'msg_mock',
           type: 'message',
           role: 'assistant',
           model: 'claude-sonnet-5',
-          content: [{ type: 'text', text: JSON.stringify({ formatted: CLEANED }) }],
+          content: [{ type: 'text', text: JSON.stringify(payload) }],
           stop_reason: 'end_turn',
           stop_sequence: null,
           usage: { input_tokens: 10, output_tokens: 10 },
@@ -290,6 +297,19 @@ test('keyless demo mode: mock ASR + passthrough Flow', async () => {
   assert.match(body.raw, /no wait actually tuesday/);
   assert.equal(body.formatted, body.raw); // passthrough leaves it untouched
   assert.equal(body.meta.flow.provider, 'passthrough');
+});
+
+test('meeting cleanup reattaches speaker labels mechanically', async () => {
+  process.env.ANTHROPIC_API_KEY = 'k';
+  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${mockPort}`;
+
+  const { status, body } = await postAudio('standup.wav', 'audio/wav', { diarize: 'true' });
+  assert.equal(status, 200);
+  assert.match(body.raw, /^Speaker 1: um so are we still on/);
+  // The model only returned turn texts; the labels come from the server, so
+  // every cleaned line must carry its original speaker.
+  assert.equal(body.formatted, 'Speaker 1: clean#0\nSpeaker 2: clean#1\nSpeaker 1: clean#2');
+  assert.equal(body.meta.flow.provider, 'anthropic');
 });
 
 test('openai-compatible (DeepSeek-shaped) Flow cleans the transcript', async () => {
