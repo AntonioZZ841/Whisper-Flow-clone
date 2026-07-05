@@ -162,11 +162,21 @@ function runNemo(inPath, model) {
           new Error(`NeMo transcriber exited ${code}: ${err.trim().slice(-300)}`),
         );
       }
-      try {
-        resolve(String(JSON.parse(out).text ?? ''));
-      } catch {
-        reject(new Error(`NeMo transcriber returned unexpected output: ${out.slice(0, 200)}`));
+      // The result is the last stdout line that is a JSON object with a
+      // "text" key — tolerating any stray log lines NeMo may emit on stdout
+      // despite the sidecar routing its logging to stderr.
+      for (const line of out.trim().split('\n').reverse()) {
+        let parsed;
+        try {
+          parsed = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (parsed && typeof parsed === 'object' && 'text' in parsed) {
+          return resolve(String(parsed.text ?? ''));
+        }
       }
+      reject(new Error(`NeMo transcriber returned unexpected output: ${out.slice(-200)}`));
     });
   });
 }

@@ -50,6 +50,7 @@ const ENV_KEYS = [
 // NeMo Node wiring is testable without a GPU or the nemo_toolkit install.
 let stubDir;
 let stubOk;
+let stubNoisy;
 let stubFail;
 
 before(async () => {
@@ -95,12 +96,19 @@ before(async () => {
 
   stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nemo-stub-'));
   stubOk = path.join(stubDir, 'ok.sh');
+  stubNoisy = path.join(stubDir, 'noisy.sh');
   stubFail = path.join(stubDir, 'fail.sh');
   // Args ($1=script path, $2=audio path) are ignored — we only exercise the
-  // Node-side spawn/parse contract.
+  // Node-side spawn/parse contract. The noisy stub mimics real NeMo, whose
+  // logger writes to stdout before the JSON result line.
   fs.writeFileSync(stubOk, '#!/bin/sh\necho \'{"text":"hey from nemo"}\'\n');
+  fs.writeFileSync(
+    stubNoisy,
+    '#!/bin/sh\necho "[NeMo I 2026-07-05 mixins:184] Tokenizer initialized with 1024 tokens"\necho "loading checkpoint 100%"\necho \'{"text":"hey from noisy nemo"}\'\n',
+  );
   fs.writeFileSync(stubFail, '#!/bin/sh\necho "boom" >&2\nexit 1\n');
   fs.chmodSync(stubOk, 0o755);
+  fs.chmodSync(stubNoisy, 0o755);
   fs.chmodSync(stubFail, 0o755);
 });
 
@@ -271,6 +279,15 @@ test('transcribeWithNemo: writes a temp file, runs the sidecar, parses JSON', as
     'nvidia/parakeet-tdt-0.6b-v2',
   );
   assert.deepEqual(out, { text: 'hey from nemo', mock: false, provider: 'nemo' });
+});
+
+test('transcribeWithNemo: tolerates NeMo log noise on stdout before the JSON', async () => {
+  process.env.NEMO_PYTHON = stubNoisy;
+  const out = await transcribeWithNemo(
+    { buffer: Buffer.from('audio'), originalname: 'clip.webm' },
+    'nvidia/parakeet-tdt-0.6b-v2',
+  );
+  assert.deepEqual(out, { text: 'hey from noisy nemo', mock: false, provider: 'nemo' });
 });
 
 test('transcribeWithNemo: surfaces a non-zero exit from the sidecar', async () => {

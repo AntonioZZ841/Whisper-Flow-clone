@@ -69,6 +69,12 @@ def main():
     model_name = os.environ.get("NEMO_MODEL", DEFAULT_MODEL)
     wav = to_wav_16k_mono(sys.argv[1])
 
+    # NeMo's logger writes to stdout, but our contract with src/asr.js is that
+    # stdout carries exactly one JSON line. Point sys.stdout at stderr before
+    # the import (the logger binds its stream then), restore it for the result.
+    real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     try:
         import nemo.collections.asr as nemo_asr  # heavy import; keep it lazy
     except ImportError:
@@ -78,14 +84,17 @@ def main():
     try:
         model = nemo_asr.models.ASRModel.from_pretrained(model_name)
         result = model.transcribe([wav])
-        print(json.dumps({"text": str(extract_text(result))}))
+        text = str(extract_text(result))
     except Exception as exc:  # noqa: BLE001 — surface any model/runtime error
         fail(f"NeMo transcription failed: {exc}")
     finally:
+        sys.stdout = real_stdout
         try:
             os.remove(wav)
         except OSError:
             pass
+
+    print(json.dumps({"text": text}))
 
 
 if __name__ == "__main__":
