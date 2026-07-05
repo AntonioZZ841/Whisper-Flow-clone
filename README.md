@@ -59,7 +59,7 @@ Sources: [Baseten × Wispr Flow case study](https://www.baseten.co/resources/cus
 | Push-to-talk capture | Global Fn hotkey, any app | In-page button / space bar (hold or tap-toggle) |
 | Transcribe an existing recording | — | Upload / drag-and-drop an audio file (webm, mp3, wav, m4a, ogg, flac) |
 | Stage 1 ASR | Cloud Whisper-family + in-house | Any OpenAI-compatible Whisper endpoint, **local NVIDIA NeMo** (GPU), or mock |
-| Stage 2 cleanup | Fine-tuned Llama on Baseten | **Claude Sonnet 5** by default, or any OpenAI-compatible chat API (e.g. **DeepSeek**) |
+| Stage 2 cleanup | Fine-tuned Llama on Baseten | **Claude Haiku 4.5** by default, or any OpenAI-compatible chat API (e.g. **DeepSeek**) |
 | Smart Formatting + Backtrack | ✅ | ✅ (the Flow stage's system prompt) |
 | Per-utterance pipeline | ✅ | ✅ |
 | Auto-typing into any app | ✅ (accessibility APIs) | ❌ browser sandbox — inserts at the cursor of the in-page editor instead |
@@ -88,7 +88,7 @@ browser (public/)                      server (Node + Express)
     is demoable with zero credentials.
 - **`src/flow.js`** — the Flow stage. Sends the raw transcript plus a
   Smart-Formatting-and-Backtrack system prompt to the configured LLM:
-  - **`anthropic`** *(default)* — `claude-sonnet-5` via the official SDK, with
+  - **`anthropic`** *(default)* — `claude-haiku-4-5` via the official SDK, with
     thinking disabled and `effort: low` (dictation must feel instant) and a
     JSON-schema structured output.
   - **`openai-compatible`** — any `/chat/completions` server; the defaults
@@ -115,7 +115,7 @@ the whole UI. Add keys to light up each stage independently:
 | --- | --- |
 | Cloud transcription | `TRANSCRIPTION_API_KEY` (OpenAI, or point `TRANSCRIPTION_API_URL` at your own whisper.cpp/faster-whisper server) |
 | Local transcription on a GPU box | `TRANSCRIPTION_PROVIDER=nemo` (see below) |
-| Cleanup with Claude Sonnet 5 | `ANTHROPIC_API_KEY` |
+| Cleanup with Claude (default Haiku 4.5) | `ANTHROPIC_API_KEY` |
 | Cleanup with DeepSeek (or any OpenAI-compatible LLM) | `FLOW_PROVIDER=openai-compatible`, `FLOW_API_KEY`, and optionally `FLOW_API_URL` / `FLOW_MODEL` |
 
 Provider selection defaults to **`auto`**: a cloud key wins if set, otherwise
