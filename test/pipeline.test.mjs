@@ -259,6 +259,22 @@ test('uploaded recording is transcribed with its extension preserved', async () 
   assert.equal(lastAsrFilename, 'meeting-recording.wav');
 });
 
+test('a large upload (beyond the old 25 MB in-memory cap) is accepted', async () => {
+  process.env.TRANSCRIPTION_API_KEY = 'k';
+  process.env.TRANSCRIPTION_API_URL = mockUrl('/v1/audio/transcriptions');
+
+  const fd = new FormData();
+  fd.append(
+    'audio',
+    new Blob([Buffer.alloc(30 * 1024 * 1024)], { type: 'audio/wav' }),
+    'long-meeting.wav',
+  );
+  const r = await fetch(`http://127.0.0.1:${appPort}/api/transcribe`, { method: 'POST', body: fd });
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).raw, ASR_TEXT);
+  assert.equal(lastAsrFilename, 'long-meeting.wav');
+});
+
 test('flow stage falls back to raw transcript when the provider errors', async () => {
   process.env.FLOW_PROVIDER = 'openai-compatible';
   process.env.FLOW_API_KEY = 'k';

@@ -15,6 +15,7 @@
 // TRANSCRIPTION_PROVIDER=auto | mock | openai-compatible | nemo.
 
 import { spawn, execFileSync } from 'node:child_process';
+import { openAsBlob } from 'node:fs';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -97,17 +98,20 @@ export async function transcribe(file) {
 
 // ── openai-compatible (OpenAI / whisper.cpp / faster-whisper) ───────────────
 
-async function transcribeOpenAICompatible({ buffer, mimetype, originalname }, model) {
+async function transcribeOpenAICompatible({ buffer, path: filePath, mimetype, originalname }, model) {
   const url =
     process.env.TRANSCRIPTION_API_URL ||
     'https://api.openai.com/v1/audio/transcriptions';
 
+  // Disk-spooled uploads (the normal case) become a file-backed Blob so a
+  // large recording is streamed, not copied into memory; buffer is the
+  // fallback for direct callers.
+  const blob = filePath
+    ? await openAsBlob(filePath, { type: mimetype || 'audio/webm' })
+    : new Blob([buffer], { type: mimetype || 'audio/webm' });
+
   const form = new FormData();
-  form.append(
-    'file',
-    new Blob([buffer], { type: mimetype || 'audio/webm' }),
-    originalname || 'audio.webm',
-  );
+  form.append('file', blob, originalname || 'audio.webm');
   form.append('model', model);
 
   const res = await fetch(url, {
@@ -131,7 +135,14 @@ async function transcribeOpenAICompatible({ buffer, mimetype, originalname }, mo
 // prints {"text": ...}. Node stays the orchestrator; the GPU work lives in
 // Python, where NeMo actually runs. Exported for direct testing.
 
-export async function transcribeWithNemo({ buffer, originalname }, model) {
+export async function transcribeWithNemo({ buffer, path: filePath, originalname }, model) {
+  // Disk-spooled uploads already sit in a temp file (extension preserved by
+  // the upload layer) — hand that path straight to the sidecar. The buffer
+  // branch serves direct callers that never touched disk.
+  if (filePath) {
+    const text = await runNemo(filePath, model);
+    return { text: text.trim(), mock: false, provider: 'nemo' };
+  }
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nemo-'));
   const inPath = path.join(dir, path.basename(originalname || 'audio.webm'));
   await writeFile(inPath, buffer);

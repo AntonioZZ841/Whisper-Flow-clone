@@ -179,6 +179,8 @@ requests (`scripts/nemo_transcribe.py` documents the tradeoff).
 - **Upload a recording** — drag an audio file onto the drop zone, or click to
   pick one (`webm`, `mp3`, `wav`, `m4a`, `ogg`, `flac`). The original filename
   is forwarded so the ASR engine detects the format from its extension.
+  Uploads spool to a temp file rather than RAM, so long recordings (up to
+  `MAX_UPLOAD_MB`, default 200 MB) are fine; oversized uploads get a clean 413.
 
 Both go through the exact same `ASR → Flow` pipeline.
 

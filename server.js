@@ -10,6 +10,8 @@ import express from 'express';
 import multer from 'multer';
 import https from 'node:https';
 import { existsSync, readFileSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transcribe, asrConfig } from './src/asr.js';
@@ -33,11 +35,21 @@ const httpsAvailable = existsSync(HTTPS_KEY_FILE) && existsSync(HTTPS_CERT_FILE)
 
 const app = express();
 
-// Clips are short, single utterances — keep them in memory and forward
-// straight to the ASR provider; nothing touches disk.
+// Uploads spool to disk so a long recording never has to fit in RAM — live
+// mic clips are small, but uploaded files can be full meetings. The temp file
+// is deleted after the request. The original extension is preserved so audio
+// tooling downstream can detect the container format.
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 200;
 const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 }, // Whisper's own upload cap
+  storage: multer.diskStorage({
+    destination: os.tmpdir(),
+    filename: (_req, file, cb) =>
+      cb(
+        null,
+        `flow-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname || '') || '.webm'}`,
+      ),
+  }),
+  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -70,7 +82,20 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
     res
       .status(502)
       .json({ error: 'Transcription failed.', detail: String(err?.message ?? err) });
+  } finally {
+    if (req.file?.path) unlink(req.file.path).catch(() => {});
   }
+});
+
+// Multer aborts oversized uploads with LIMIT_FILE_SIZE — answer with a clear
+// 413 instead of Express's default 500.
+app.use((err, _req, res, next) => {
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      error: `Audio exceeds the ${MAX_UPLOAD_MB} MB upload limit — set MAX_UPLOAD_MB to raise it.`,
+    });
+  }
+  next(err);
 });
 
 export { app };
@@ -105,14 +130,16 @@ if (isDirectRun) {
     );
   };
 
-  if (httpsAvailable) {
-    https
-      .createServer(
-        { key: readFileSync(HTTPS_KEY_FILE), cert: readFileSync(HTTPS_CERT_FILE) },
-        app,
-      )
-      .listen(PORT, HOST, onListening);
-  } else {
-    app.listen(PORT, HOST, onListening);
-  }
+  const server = httpsAvailable
+    ? https
+        .createServer(
+          { key: readFileSync(HTTPS_KEY_FILE), cert: readFileSync(HTTPS_CERT_FILE) },
+          app,
+        )
+        .listen(PORT, HOST, onListening)
+    : app.listen(PORT, HOST, onListening);
+
+  // A large upload on a slow connection can outlast Node's 5-minute default
+  // for receiving a request; give it half an hour.
+  server.requestTimeout = 30 * 60 * 1000;
 }
