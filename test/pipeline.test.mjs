@@ -17,7 +17,13 @@ import path from 'node:path';
 import { once } from 'node:events';
 
 import { app } from '../server.js';
-import { asrConfig, resolveAsr, transcribe, transcribeWithNemo } from '../src/asr.js';
+import {
+  asrConfig,
+  resolveAsr,
+  transcribe,
+  transcribeWithNemo,
+  stopNemoWorker,
+} from '../src/asr.js';
 import { flowConfig, flow } from '../src/flow.js';
 
 const ASR_TEXT = 'um so this is uh a live A S R test no wait an integration test';
@@ -37,6 +43,7 @@ const ENV_KEYS = [
   'NEMO_MODEL',
   'NEMO_PYTHON',
   'NEMO_ENABLED',
+  'NEMO_KEEP_WARM',
   'ANTHROPIC_API_KEY',
   'ANTHROPIC_BASE_URL',
   'ANTHROPIC_AUTH_TOKEN',
@@ -53,6 +60,8 @@ let stubOk;
 let stubNoisy;
 let stubDiar;
 let stubFail;
+let stubWorker;
+let stubWorkerDie;
 
 before(async () => {
   mock = http.createServer((req, res) => {
@@ -100,6 +109,8 @@ before(async () => {
   stubNoisy = path.join(stubDir, 'noisy.sh');
   stubDiar = path.join(stubDir, 'diar.sh');
   stubFail = path.join(stubDir, 'fail.sh');
+  stubWorker = path.join(stubDir, 'worker.sh');
+  stubWorkerDie = path.join(stubDir, 'worker-die.sh');
   // Args ($1=script path, $2=audio path) are ignored — we only exercise the
   // Node-side spawn/parse contract. The noisy stub mimics real NeMo, whose
   // logger writes to stdout before the JSON result line.
@@ -114,15 +125,36 @@ before(async () => {
     stubDiar,
     '#!/bin/sh\ncase "$*" in\n*--diarize*) echo \'{"text":"hello there general kenobi","turns":[{"speaker":"Speaker 1","start":0,"end":1.1,"text":"hello there"},{"speaker":"Speaker 2","start":1.4,"end":2.6,"text":"general kenobi"}]}\';;\n*) echo \'{"text":"hello there general kenobi"}\';;\nesac\n',
   );
+  // A protocol-conforming resident worker: replies per JSON-line request,
+  // embedding its PID so tests can prove requests share one process.
+  fs.writeFileSync(
+    stubWorker,
+    `#!/bin/sh
+echo '{"ready": true}'
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\\([0-9][0-9]*\\).*/\\1/p')
+  case "$line" in
+    *'"warm":true'*) printf '{"id": %s, "ok": true}\\n' "$id" ;;
+    *'"diarize":true'*) printf '{"id": %s, "text": "warm hello there", "turns": [{"speaker": "Speaker 1", "start": 0, "end": 1, "text": "warm hello"}, {"speaker": "Speaker 2", "start": 1.2, "end": 2, "text": "there"}]}\\n' "$id" ;;
+    *) printf '{"id": %s, "text": "warm hello from pid %s"}\\n' "$id" "$$" ;;
+  esac
+done
+`,
+  );
+  // Reads one request and dies without replying — the crash case.
+  fs.writeFileSync(stubWorkerDie, '#!/bin/sh\nread -r line\nexit 7\n');
   fs.chmodSync(stubOk, 0o755);
   fs.chmodSync(stubNoisy, 0o755);
   fs.chmodSync(stubDiar, 0o755);
   fs.chmodSync(stubFail, 0o755);
+  fs.chmodSync(stubWorker, 0o755);
+  fs.chmodSync(stubWorkerDie, 0o755);
 });
 
 after(() => {
   mock?.close();
   appServer?.close();
+  stopNemoWorker();
   if (stubDir) fs.rmSync(stubDir, { recursive: true, force: true });
 });
 
@@ -298,6 +330,7 @@ test('flow stage falls back to raw transcript when the provider errors', async (
 // ── NeMo provider (Node-side wiring, GPU/model stubbed) ─────────────────────
 
 test('transcribeWithNemo: writes a temp file, runs the sidecar, parses JSON', async () => {
+  process.env.NEMO_KEEP_WARM = 'false';
   process.env.NEMO_PYTHON = stubOk;
   const out = await transcribeWithNemo(
     { buffer: Buffer.from('audio'), originalname: 'clip.webm' },
@@ -307,6 +340,7 @@ test('transcribeWithNemo: writes a temp file, runs the sidecar, parses JSON', as
 });
 
 test('transcribeWithNemo: --diarize is forwarded and speaker turns are parsed', async () => {
+  process.env.NEMO_KEEP_WARM = 'false'; // exercise the one-shot sidecar contract
   process.env.NEMO_PYTHON = stubDiar;
   const plain = await transcribeWithNemo(
     { buffer: Buffer.from('audio'), originalname: 'meeting.wav' },
@@ -340,6 +374,7 @@ test('keyless meeting mode: mock ASR returns labeled speaker turns', async () =>
 });
 
 test('transcribeWithNemo: tolerates NeMo log noise on stdout before the JSON', async () => {
+  process.env.NEMO_KEEP_WARM = 'false';
   process.env.NEMO_PYTHON = stubNoisy;
   const out = await transcribeWithNemo(
     { buffer: Buffer.from('audio'), originalname: 'clip.webm' },
@@ -349,11 +384,52 @@ test('transcribeWithNemo: tolerates NeMo log noise on stdout before the JSON', a
 });
 
 test('transcribeWithNemo: surfaces a non-zero exit from the sidecar', async () => {
+  process.env.NEMO_KEEP_WARM = 'false';
   process.env.NEMO_PYTHON = stubFail;
   await assert.rejects(
     () => transcribeWithNemo({ buffer: Buffer.from('x'), originalname: 'c.webm' }, 'm'),
     /NeMo transcriber exited 1.*boom/s,
   );
+});
+
+// ── Resident NeMo worker (default path: models stay loaded) ────────────────
+
+test('nemo worker: consecutive requests reuse one resident process', async () => {
+  process.env.NEMO_PYTHON = stubWorker;
+  stopNemoWorker(); // fresh worker for this test
+  const file = { buffer: Buffer.from('audio'), originalname: 'a.webm' };
+
+  const first = await transcribeWithNemo(file, 'm');
+  const second = await transcribeWithNemo(file, 'm');
+  assert.match(first.text, /^warm hello from pid \d+$/);
+  assert.equal(second.text, first.text); // same PID → same process, no reload
+
+  stopNemoWorker();
+  const third = await transcribeWithNemo(file, 'm');
+  assert.notEqual(third.text, first.text); // stopped → respawned
+});
+
+test('nemo worker: speaker turns come back through the resident protocol', async () => {
+  process.env.NEMO_PYTHON = stubWorker;
+  stopNemoWorker();
+  const out = await transcribeWithNemo(
+    { buffer: Buffer.from('audio'), originalname: 'meeting.wav' },
+    'm',
+    { diarize: true },
+  );
+  assert.equal(out.turns.length, 2);
+  assert.equal(out.turns[0].speaker, 'Speaker 1');
+});
+
+test('nemo worker: a dying worker rejects the request, then respawns clean', async () => {
+  process.env.NEMO_PYTHON = stubWorkerDie;
+  stopNemoWorker();
+  const file = { buffer: Buffer.from('audio'), originalname: 'a.webm' };
+  await assert.rejects(() => transcribeWithNemo(file, 'm'), /NeMo worker exited 7/);
+
+  process.env.NEMO_PYTHON = stubWorker;
+  const out = await transcribeWithNemo(file, 'm');
+  assert.match(out.text, /^warm hello from pid \d+$/);
 });
 
 // ── Bad request ─────────────────────────────────────────────────────────────

@@ -53,7 +53,8 @@ def fail(message):
 
 
 def to_wav_16k_mono(src):
-    """Transcode any input to 16 kHz mono WAV via ffmpeg."""
+    """Transcode any input to 16 kHz mono WAV via ffmpeg. Raises RuntimeError
+    on failure so long-lived callers (nemo_worker.py) survive a bad file."""
     fd, dst = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     try:
@@ -65,10 +66,10 @@ def to_wav_16k_mono(src):
         )
     except FileNotFoundError:
         os.remove(dst)
-        fail("ffmpeg not found on PATH (needed to decode the audio for NeMo)")
+        raise RuntimeError("ffmpeg not found on PATH (needed to decode the audio for NeMo)")
     except subprocess.CalledProcessError as exc:
         os.remove(dst)
-        fail(f"ffmpeg failed: {exc.stderr.decode('utf-8', 'ignore')[-300:]}")
+        raise RuntimeError(f"ffmpeg failed: {exc.stderr.decode('utf-8', 'ignore')[-300:]}")
     return dst
 
 
@@ -162,14 +163,19 @@ def merge_into_turns(word_spans, segments):
     ]
 
 
-def diarize_turns(wav, word_spans):
-    """Speaker turns for `wav`, or (None, warning) when labeling is not
-    possible — diarization failure must never lose the transcript."""
+def load_diar_model():
     from nemo.collections.asr.models import SortformerEncLabelModel
 
-    diar_model = SortformerEncLabelModel.from_pretrained(
+    return SortformerEncLabelModel.from_pretrained(
         os.environ.get("NEMO_DIAR_MODEL", DEFAULT_DIAR_MODEL)
     )
+
+
+def diarize_turns(wav, word_spans, diar_model=None):
+    """Speaker turns for `wav`, or (None, warning) when labeling is not
+    possible — diarization failure must never lose the transcript. Pass a
+    preloaded model (nemo_worker.py) to skip the per-call load."""
+    diar_model = diar_model or load_diar_model()
     segments = extract_speaker_segments(diar_model.diarize(audio=[wav], batch_size=1))
     turns = merge_into_turns(word_spans, segments)
     if not turns:
@@ -183,7 +189,10 @@ def main():
     diarize = "--diarize" in sys.argv[2:]
 
     model_name = os.environ.get("NEMO_MODEL", DEFAULT_MODEL)
-    wav = to_wav_16k_mono(sys.argv[1])
+    try:
+        wav = to_wav_16k_mono(sys.argv[1])
+    except RuntimeError as exc:
+        fail(str(exc))
 
     # NeMo's logger writes to stdout, but our contract with src/asr.js is that
     # stdout carries exactly one JSON line. Point sys.stdout at stderr before

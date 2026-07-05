@@ -166,11 +166,13 @@ Then:
 TRANSCRIPTION_PROVIDER=nemo NEMO_MODEL=nvidia/parakeet-tdt-0.6b-v2 npm start
 ```
 
-The first request downloads and loads the model; subsequent ones reuse the
-cache. For a busy deployment, run a resident NeMo service that exposes an
-OpenAI-compatible `/audio/transcriptions` endpoint and use the
-`openai-compatible` provider pointed at it, so the model stays warm between
-requests (`scripts/nemo_transcribe.py` documents the tradeoff).
+The models stay **resident**: a long-lived worker (`scripts/nemo_worker.py`)
+loads them once — the ASR model at server startup, the diarizer on the first
+meeting request — and keeps them on the GPU, so a dictation costs seconds,
+not a model reload. The very first use downloads the model weights to the
+local cache. Set `NEMO_KEEP_WARM=false` to revert to the one-shot sidecar
+(`scripts/nemo_transcribe.py`), which frees GPU memory between requests at
+~15 s model-load cost per call.
 
 ### Meeting transcription — who said what (speaker diarization)
 
@@ -198,10 +200,10 @@ Notes:
 - Speakers are labeled by order of first appearance (`Speaker 1`, `Speaker
   2`, …) — telling voices apart, not recognizing *whose* voice; no voice
   profiles are stored.
-- The first meeting request downloads the diarization model (~700 MB);
-  override with `NEMO_DIAR_MODEL`. If diarization fails, the transcript is
-  still returned unlabeled with a warning — labeling degrades, dictation is
-  never lost.
+- The first meeting request downloads the diarization model (~700 MB) and
+  keeps it loaded alongside the ASR model; override with `NEMO_DIAR_MODEL`.
+  If diarization fails, the transcript is still returned unlabeled with a
+  warning — labeling degrades, dictation is never lost.
 
 ## Two ways to get audio in
 

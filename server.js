@@ -14,7 +14,7 @@ import { unlink } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { transcribe, asrConfig } from './src/asr.js';
+import { transcribe, asrConfig, warmNemo } from './src/asr.js';
 import { flow, flowConfig } from './src/flow.js';
 import { getLanIPv4s } from './src/net.js';
 
@@ -134,6 +134,8 @@ if (isDirectRun) {
       // A shell-exported NEMO_PYTHON silently beats .env (dotenv never
       // overrides), so show which interpreter the sidecar will actually use.
       console.log(`                interpreter: ${process.env.NEMO_PYTHON || 'python3'}`);
+      // Start loading the model now so the first dictation doesn't pay it.
+      warmNemo(a.model);
     }
     console.log(
       `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,

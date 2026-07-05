@@ -170,21 +170,108 @@ export async function transcribeWithNemo(
     mock: false,
     provider: 'nemo',
   });
+  // Resident worker by default (models stay loaded on the GPU between
+  // requests); NEMO_KEEP_WARM=false reverts to the one-shot sidecar.
+  const run = (p) =>
+    process.env.NEMO_KEEP_WARM === 'false'
+      ? runNemo(p, model, diarize)
+      : requestNemoWorker(model, { path: p, diarize });
 
   // Disk-spooled uploads already sit in a temp file (extension preserved by
   // the upload layer) — hand that path straight to the sidecar. The buffer
   // branch serves direct callers that never touched disk.
   if (filePath) {
-    return fromResult(await runNemo(filePath, model, diarize));
+    return fromResult(await run(filePath));
   }
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nemo-'));
   const inPath = path.join(dir, path.basename(originalname || 'audio.webm'));
   await writeFile(inPath, buffer);
   try {
-    return fromResult(await runNemo(inPath, model, diarize));
+    return fromResult(await run(inPath));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+// ── Resident NeMo worker ────────────────────────────────────────────────────
+//
+// One long-lived Python process (scripts/nemo_worker.py) holds the models on
+// the GPU; each transcription is a JSON line over stdin/stdout. Spawned
+// lazily on first use, respawned on the next request if it dies. Requests
+// are matched to replies by id, so a crash rejects exactly the in-flight
+// requests and nothing is silently lost.
+
+let nemoWorker = null;
+
+function getNemoWorker(model) {
+  if (nemoWorker && nemoWorker.proc.exitCode === null) return nemoWorker;
+
+  const py = process.env.NEMO_PYTHON || 'python3';
+  const script = path.join(__dirname, '..', 'scripts', 'nemo_worker.py');
+  const proc = spawn(py, [script], { env: { ...process.env, NEMO_MODEL: model } });
+  const worker = { proc, pending: new Map(), nextId: 1, buf: '', lastErr: '' };
+
+  proc.stdout.on('data', (d) => {
+    worker.buf += d;
+    let nl;
+    while ((nl = worker.buf.indexOf('\n')) >= 0) {
+      const line = worker.buf.slice(0, nl);
+      worker.buf = worker.buf.slice(nl + 1);
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue; // stray log line on stdout — the reply will still come
+      }
+      if (!msg || typeof msg !== 'object' || !('id' in msg)) continue;
+      const req = worker.pending.get(msg.id);
+      if (!req) continue;
+      worker.pending.delete(msg.id);
+      if (msg.error) req.reject(new Error(`NeMo worker: ${msg.error}`));
+      else req.resolve(msg);
+    }
+  });
+  proc.stderr.on('data', (d) => {
+    // Rolling tail. Native crash dumps put the informative line well before
+    // their ~30 stack frames, so keep enough to include it.
+    worker.lastErr = (worker.lastErr + d).slice(-8000);
+  });
+  const failAll = (err) => {
+    for (const req of worker.pending.values()) req.reject(err);
+    worker.pending.clear();
+    if (nemoWorker === worker) nemoWorker = null;
+  };
+  proc.on('error', failAll); // e.g. python3 not installed
+  proc.on('close', (code) =>
+    failAll(new Error(`NeMo worker exited ${code}: ${worker.lastErr.trim().slice(-300)}`)),
+  );
+
+  nemoWorker = worker;
+  return worker;
+}
+
+function requestNemoWorker(model, payload) {
+  const worker = getNemoWorker(model);
+  const id = worker.nextId++;
+  return new Promise((resolve, reject) => {
+    worker.pending.set(id, { resolve, reject });
+    worker.proc.stdin.write(`${JSON.stringify({ id, ...payload })}\n`);
+  });
+}
+
+// Preload the ASR model at server startup so even the first dictation is
+// fast. Fire-and-forget: a warm-up failure just means the first real
+// request pays the load (and surfaces any actual error itself).
+export function warmNemo(model) {
+  if (process.env.NEMO_KEEP_WARM === 'false') return;
+  requestNemoWorker(model, { warm: true }).catch(() => {});
+}
+
+// Tests (and graceful shutdowns) can drop the worker; the next request
+// respawns it.
+export function stopNemoWorker() {
+  nemoWorker?.proc.kill();
+  nemoWorker = null;
 }
 
 function runNemo(inPath, model, diarize = false) {
