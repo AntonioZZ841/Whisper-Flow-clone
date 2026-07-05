@@ -147,7 +147,7 @@ Whisper `large-v3` auto-detects the language per utterance, so English
 dictation keeps working and 中英混说 comes out right; the Flow stage then
 cleans the transcript in the language(s) spoken — Mandarin fillers (嗯/呃)
 removed, Chinese punctuation, code-switched words kept as spoken. With the
-Whisper server configured, meeting uploads route to the **hybrid** provider
+Whisper server configured, speaker-labeled requests (mic or upload) route to the **hybrid** provider
 (Whisper words + Sortformer speaker segments), so labeled meetings are
 multilingual too. `/api/health` shows the active split as `asr.provider` vs
 `asr.meeting_provider`.

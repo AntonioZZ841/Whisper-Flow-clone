@@ -52,7 +52,14 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+// no-cache = revalidate every load (cheap 304s via ETag). Phone browsers
+// otherwise apply heuristic caching to JS/CSS and can run stale frontend
+// code against a newer backend — silently missing newer form fields.
+app.use(
+  express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res) => res.set('Cache-Control', 'no-cache'),
+  }),
+);
 
 app.get('/api/health', (_req, res) => {
   const asr = asrConfig();
@@ -70,11 +77,20 @@ app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No audio file was uploaded.' });
   }
+  const t0 = Date.now();
   try {
     // diarize=true (meeting mode) labels who said what — supported by the
     // local NeMo provider; mock returns a canned two-person exchange.
     const diarize = req.body?.diarize === 'true';
     const asr = await transcribe(req.file, { diarize });
+
+    // One greppable line per request — which provider ran, whether the
+    // client asked for speaker labels, and what came back.
+    console.log(
+      `transcribe ${asr.provider} diarize=${diarize} turns=${asr.turns?.length ?? '-'}` +
+        `${asr.warning ? ` warning="${asr.warning}"` : ''} ` +
+        `file=${req.file.originalname} ${(req.file.size / 1024).toFixed(0)}KB ${Date.now() - t0}ms`,
+    );
 
     const meeting = Boolean(asr.turns?.length);
     const raw = meeting

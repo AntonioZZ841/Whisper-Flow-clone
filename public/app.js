@@ -126,8 +126,6 @@ function uploadFile(file) {
     return;
   }
   els.fileName.textContent = `${file.name} · ${(file.size / 1024).toFixed(0)} KB`;
-  // Speaker labeling only makes sense for uploaded recordings — live
-  // push-to-talk dictation is by definition a single voice.
   send(file, file.name, { diarize: els.diarize.checked });
 }
 
@@ -243,7 +241,9 @@ function onRecorderStop() {
     setStatus('idle', 'ready');
     return;
   }
-  send(blob);
+  // The "Label speakers" toggle applies to mic recordings too — a phone on
+  // the table capturing a live meeting is exactly the meeting-mode use case.
+  send(blob, 'utterance.webm', { diarize: els.diarize.checked });
 }
 
 function updateTimer() {
