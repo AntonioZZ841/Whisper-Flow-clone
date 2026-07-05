@@ -5,6 +5,7 @@ node_modules/
 uploads/
 tmp/
 dist/
+certs/
 
 # Python
 __pycache__/

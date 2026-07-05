@@ -124,6 +124,28 @@ local NeMo when an NVIDIA GPU is present, otherwise mock.
 > Microphone capture requires a secure context: `localhost` is fine, remote
 > hosts need HTTPS.
 
+### HTTPS for LAN/mobile testing
+
+To try the app from another device on your network (a phone, say) instead of
+just `localhost`, generate a self-signed dev certificate once:
+
+```bash
+npm run cert    # writes certs/dev-{key,cert}.pem, covering localhost + your LAN IPs
+npm start       # detects the cert automatically and switches to HTTPS
+```
+
+The server prints the LAN URL(s) to open on other devices. Browsers will warn
+on first visit since the certificate is self-signed — accept the risk once
+per device to continue. This is a dev convenience only; a public deployment
+should sit behind a reverse proxy with a real certificate (e.g. Caddy or
+nginx with Let's Encrypt) instead of this self-signed one.
+
+The server already listens on every network interface by default (`HOST=0.0.0.0`,
+overridable in `.env`) — Node's default, not something you need to change. If
+a LAN device still can't connect, that's almost always the OS firewall (e.g.
+Windows Defender Firewall on a WSL2 host) blocking the inbound port rather
+than the app.
+
 ### Local transcription with NVIDIA NeMo (GPU)
 
 If the deployment server has an NVIDIA GPU, you can transcribe entirely
