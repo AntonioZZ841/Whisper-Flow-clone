@@ -55,7 +55,15 @@ const upload = multer({
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, asr: asrConfig(), flow: flowConfig() });
+  const asr = asrConfig();
+  const meeting = asrConfig({ diarize: true });
+  res.json({
+    ok: true,
+    // Dictation and meetings can route to different providers (multilingual
+    // Whisper vs speaker-labeling NeMo) — surface the split when it exists.
+    asr: { ...asr, ...(meeting.provider !== asr.provider ? { meeting_provider: meeting.provider } : {}) },
+    flow: flowConfig(),
+  });
 });
 
 app.post('/api/transcribe', upload.single('audio'), async (req, res) => {
@@ -130,12 +138,16 @@ if (isDirectRun) {
       `  Stage 1 ASR:  ${a.provider}${a.model ? ` (${a.model})` : ''}` +
         `${a.gpu ? ' · GPU detected' : ''}${a.reason ? ` · ${a.reason}` : ''}`,
     );
-    if (a.provider === 'nemo') {
+    const m = asrConfig({ diarize: true });
+    if (m.provider !== a.provider) {
+      console.log(`                meetings: ${m.provider}${m.model ? ` (${m.model})` : ''} · speaker labeling`);
+    }
+    if (a.provider === 'nemo' || m.provider === 'nemo') {
       // A shell-exported NEMO_PYTHON silently beats .env (dotenv never
       // overrides), so show which interpreter the sidecar will actually use.
       console.log(`                interpreter: ${process.env.NEMO_PYTHON || 'python3'}`);
-      // Start loading the model now so the first dictation doesn't pay it.
-      warmNemo(a.model);
+      // Start loading the model now so the first request doesn't pay it.
+      warmNemo((a.provider === 'nemo' ? a : m).model);
     }
     console.log(
       `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,

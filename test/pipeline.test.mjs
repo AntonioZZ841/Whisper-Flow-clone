@@ -205,6 +205,20 @@ test('resolveAsr: GPU presence and overrides drive provider selection', () => {
   assert.match(degraded.reason, /no NVIDIA GPU/);
   // NEMO_ENABLED=false keeps auto off NeMo on a GPU box
   assert.equal(resolveAsr({ NEMO_ENABLED: 'false' }, true).provider, 'mock');
+  // Per-mode routing: with a cloud/Whisper key on a GPU box, plain dictation
+  // goes to the key'd provider (multilingual), meetings go to NeMo (the only
+  // provider that labels speakers).
+  const env = { TRANSCRIPTION_API_KEY: 'k' };
+  assert.equal(resolveAsr(env, true).provider, 'openai-compatible');
+  assert.equal(resolveAsr(env, true, { diarize: true }).provider, 'nemo');
+  // ...but meetings without a GPU fall back to the key'd provider,
+  assert.equal(resolveAsr(env, false, { diarize: true }).provider, 'openai-compatible');
+  // and an explicit provider override applies to both modes.
+  assert.equal(
+    resolveAsr({ ...env, TRANSCRIPTION_PROVIDER: 'openai-compatible' }, true, { diarize: true })
+      .provider,
+    'openai-compatible',
+  );
   // custom NeMo model honored
   assert.equal(
     resolveAsr({ TRANSCRIPTION_PROVIDER: 'nemo', NEMO_MODEL: 'nvidia/canary-1b' }, true).model,

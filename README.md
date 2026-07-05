@@ -118,8 +118,38 @@ the whole UI. Add keys to light up each stage independently:
 | Cleanup with Claude (default Haiku 4.5) | `ANTHROPIC_API_KEY` |
 | Cleanup with DeepSeek (or any OpenAI-compatible LLM) | `FLOW_PROVIDER=openai-compatible`, `FLOW_API_KEY`, and optionally `FLOW_API_URL` / `FLOW_MODEL` |
 
-Provider selection defaults to **`auto`**: a cloud key wins if set, otherwise
-local NeMo when an NVIDIA GPU is present, otherwise mock.
+Provider selection defaults to **`auto`**, and routes **per request**: meeting
+uploads (speaker labeling) prefer local NeMo — the only provider that can tell
+voices apart — while plain dictation lets a configured key win, then NeMo on a
+GPU box, then mock. That split is what lets multilingual Whisper dictation and
+NeMo-labeled meetings coexist (see below).
+
+### Multilingual dictation — Mandarin, English, and code-switching
+
+The default NeMo model (Parakeet) is English-only. For dictation in Mandarin —
+including sentences that mix in English words — run the bundled local Whisper
+server on the same GPU and point the `openai-compatible` provider at it:
+
+```bash
+# one-time: python3.12 venv with faster-whisper (see scripts/whisper_server.py)
+pip install faster-whisper flask "nvidia-cudnn-cu12>=9" nvidia-cublas-cu12
+
+python scripts/whisper_server.py    # loads large-v3, stays resident on the GPU
+```
+
+```bash
+# .env
+TRANSCRIPTION_API_KEY=local
+TRANSCRIPTION_API_URL=http://127.0.0.1:8756/v1/audio/transcriptions
+```
+
+Whisper `large-v3` auto-detects the language per utterance, so English
+dictation keeps working and 中英混说 comes out right; the Flow stage then
+cleans the transcript in the language(s) spoken — Mandarin fillers (嗯/呃)
+removed, Chinese punctuation, code-switched words kept as spoken. Meeting
+uploads still route to NeMo + Sortformer for speaker labels (English audio;
+`/api/health` shows the active split as `asr.provider` vs
+`asr.meeting_provider`).
 
 > Microphone capture requires a secure context: `localhost` is fine, remote
 > hosts need HTTPS.

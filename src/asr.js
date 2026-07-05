@@ -51,10 +51,11 @@ export function hasNvidiaGpu() {
   return gpuCache;
 }
 
-// Pure provider resolution — takes the environment and whether a GPU is
-// present, returns the effective config. Kept side-effect-free so it can be
-// unit-tested for every branch without a real GPU.
-export function resolveAsr(env, gpu) {
+// Pure provider resolution — takes the environment, whether a GPU is
+// present, and the request mode; returns the effective config. Kept
+// side-effect-free so it can be unit-tested for every branch without a real
+// GPU.
+export function resolveAsr(env, gpu, { diarize = false } = {}) {
   const explicit = (env.TRANSCRIPTION_PROVIDER || 'auto').trim().toLowerCase();
   let provider;
   let reason;
@@ -72,10 +73,14 @@ export function resolveAsr(env, gpu) {
   } else if (explicit === 'mock') {
     provider = 'mock';
   } else {
-    // auto: a configured cloud key wins; otherwise use local NeMo when a GPU
-    // is available; otherwise fall back to the keyless mock.
-    if (env.TRANSCRIPTION_API_KEY) provider = 'openai-compatible';
-    else if (gpu && env.NEMO_ENABLED !== 'false') provider = 'nemo';
+    // auto routes per mode. Meetings prefer local NeMo — it is the only
+    // provider that can label speakers. Plain dictation lets a configured
+    // key win (e.g. a local multilingual Whisper server for Mandarin and
+    // code-switched speech), then NeMo on a GPU box, then the keyless mock.
+    const nemoAvailable = gpu && env.NEMO_ENABLED !== 'false';
+    if (diarize && nemoAvailable) provider = 'nemo';
+    else if (env.TRANSCRIPTION_API_KEY) provider = 'openai-compatible';
+    else if (nemoAvailable) provider = 'nemo';
     else provider = 'mock';
   }
 
@@ -89,12 +94,12 @@ export function resolveAsr(env, gpu) {
   return { provider, model, gpu, ...(reason ? { reason } : {}) };
 }
 
-export function asrConfig() {
-  return resolveAsr(process.env, hasNvidiaGpu());
+export function asrConfig({ diarize = false } = {}) {
+  return resolveAsr(process.env, hasNvidiaGpu(), { diarize });
 }
 
 export async function transcribe(file, { diarize = false } = {}) {
-  const cfg = asrConfig();
+  const cfg = asrConfig({ diarize });
   if (cfg.provider === 'mock') {
     if (diarize) {
       return {
