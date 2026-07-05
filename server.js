@@ -95,6 +95,11 @@ if (isDirectRun) {
       `  Stage 1 ASR:  ${a.provider}${a.model ? ` (${a.model})` : ''}` +
         `${a.gpu ? ' · GPU detected' : ''}${a.reason ? ` · ${a.reason}` : ''}`,
     );
+    if (a.provider === 'nemo') {
+      // A shell-exported NEMO_PYTHON silently beats .env (dotenv never
+      // overrides), so show which interpreter the sidecar will actually use.
+      console.log(`                interpreter: ${process.env.NEMO_PYTHON || 'python3'}`);
+    }
     console.log(
       `  Stage 2 Flow: ${f.provider === 'passthrough' ? 'passthrough (no LLM key set)' : `${f.provider} (${f.model})`}`,
     );
